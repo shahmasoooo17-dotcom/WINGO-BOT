@@ -21,7 +21,7 @@ const ADMIN_PASSWORD = 'Masoodking123'; // Change this to your own password
 // Payment Details
 const EASYPAISA_NUMBER = '0318-0939237';
 const JAZZCASH_NUMBER  = '0319-9837973';
-const ACCOUNT_NAME     = 'Your Name Here';
+const ACCOUNT_NAME     = 'MUHAMMAD ABID SHAH';
 
 // Premium Settings
 const PREMIUM_PRICE_PKR = 3000;
