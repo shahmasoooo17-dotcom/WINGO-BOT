@@ -1,15 +1,21 @@
 {
-  "name": "ms-bot",
-  "version": "3.0.0",
-  "description": "Telegram bot for Wingo 1-min auto results",
+  "name": "ms-trading-bot",
+  "version": "1.0.0",
+  "description": "Unified Telegram Bot - Wingo Prediction & Quotex Trading Signals",
+  "author": "Masood King",
+  "license": "MIT",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "dev": "nodemon bot.js"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0"
   },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  },
   "engines": {
-    "node": "18.x"
+    "node": ">=16.0.0"
   }
 }
