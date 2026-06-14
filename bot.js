@@ -1,14 +1,16 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// UNIFIED TRADING BOT v2.4 - WITH FEEDBACK SYSTEM
-// - Complete payment approval system (FIXED)
-// - Feedback system (users can send feedback)
-// - Admin can view all feedback
+// UNIFIED TRADING BOT v2.5 - WITH AUTO 1‑MIN WINGO RESULTS
+// - Complete payment approval system
+// - Feedback system
+// - AUTO 1‑MIN WINGO RESULTS (no manual entry)
 // - WINGO PREDICTION BOT (30s/1m predictions)
 // - QUOTEX SIGNAL BOT (with ON/OFF toggle)
-// - Multi-plan premium subscriptions (2d, 1w, 2w, 1m)
+// - Multi-plan premium subscriptions
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
+const axios = require('axios');
 
 // ═════════════════════════════════════════════════════════════════════════════════
 // ⚙️  YOUR SETTINGS - EDIT THESE
@@ -48,7 +50,7 @@ let WINGO_ENABLED = true;
 let QUOTEX_ENABLED = false;
 
 // ═════════════════════════════════════════════════════════════════════════════════
-// DO NOT CHANGE BELOW
+// DO NOT CHANGE BELOW (unless you know what you're doing)
 // ═════════════════════════════════════════════════════════════════════════════════
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
@@ -64,6 +66,43 @@ const allUsers        = {};
 const adminSessions   = {};
 const feedbacks       = {};  // { feedbackId: { userId, name, username, message, date, rating } }
 let feedbackCounter   = 1;
+
+// ── NEW: Prediction Storage for Auto Results ────────────────────────────────────
+const predictions = {};      // key: predictionId, value: { userId, period, predictedNum, predictedColor, predictedSize, timestamp, is30s, notified }
+let nextPredictionId = 1;
+let lastProcessedPeriod = null;   // last 1‑min period we've processed
+let autoResultInterval = null;
+
+// Data persistence file
+const DATA_FILE = 'bot_data.json';
+
+function saveData() {
+    const data = {
+        premiumUsers, wingoFreeUsage, quotexFreeUsage, allUsers,
+        predictions, nextPredictionId, feedbacks, pendingPayments,
+        lastProcessedPeriod
+    };
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+function loadData() {
+    if (fs.existsSync(DATA_FILE)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(DATA_FILE));
+            Object.assign(premiumUsers, data.premiumUsers || {});
+            Object.assign(wingoFreeUsage, data.wingoFreeUsage || {});
+            Object.assign(quotexFreeUsage, data.quotexFreeUsage || {});
+            Object.assign(allUsers, data.allUsers || {});
+            Object.assign(predictions, data.predictions || {});
+            Object.assign(feedbacks, data.feedbacks || {});
+            Object.assign(pendingPayments, data.pendingPayments || {});
+            nextPredictionId = data.nextPredictionId || 1;
+            lastProcessedPeriod = data.lastProcessedPeriod || null;
+        } catch(e) { console.log('Error loading data:', e); }
+    }
+}
+loadData();
+setInterval(saveData, 5 * 60 * 1000);  // save every 5 minutes
 
 // ── Wingo Functions ──────────────────────────────────────────────────────────────
 
@@ -107,7 +146,113 @@ function wingoPredict(periodStr, isPrem) {
     return { num, color, size, conf };
 }
 
-// ── Quotex Functions ────────────────────────────────────────────────────────────
+// ── Prediction saving for auto result ───────────────────────────────────────────
+function savePrediction(userId, period, predictedNum, predictedColor, predictedSize, is30s, isPremiumUser) {
+    const id = nextPredictionId++;
+    predictions[id] = {
+        id, userId, period,
+        predictedNum, predictedColor, predictedSize,
+        timestamp: Date.now(),
+        is30s,
+        isPremium: isPremiumUser,
+        notified: false
+    };
+    saveData();
+    return id;
+}
+
+// ── Auto Result Fetcher for 1‑Min WinGo ─────────────────────────────────────────
+async function fetchWingo1MResults() {
+    try {
+        const url = 'https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json';
+        const response = await axios.get(url, { timeout: 10000 });
+        const data = response.data;
+        if (!data || !data.data || !data.data.list) return;
+
+        const list = data.data.list; // most recent first
+        for (const item of list) {
+            const period = item.period?.toString();
+            if (!period || period.length < 12) continue;
+            // Skip if already processed (older than lastProcessedPeriod)
+            if (lastProcessedPeriod && period <= lastProcessedPeriod) continue;
+
+            const number = item.number;
+            if (number === undefined || number === null) continue;
+
+            // Map color from API to emoji format
+            let color = '';
+            const rawColor = (item.color || '').toLowerCase();
+            if (rawColor.includes('red')) color = '🔴 Red';
+            else if (rawColor.includes('green')) color = '🟢 Green';
+            else if (rawColor.includes('violet')) color = '🟣 Violet';
+            else if (rawColor === 'red_violet') color = '🔴 Red + 🟣 Violet';
+            else if (rawColor === 'green_violet') color = '🟢 Green + 🟣 Violet';
+            else color = '🔴 Red'; // fallback
+
+            let size = '';
+            const rawSize = (item.size || '').toLowerCase();
+            if (rawSize.includes('big')) size = '📈 BIG';
+            else if (rawSize.includes('small')) size = '📉 SMALL';
+            else size = number >= 5 ? '📈 BIG' : '📉 SMALL';
+
+            // Find all predictions for this period (1-min only)
+            const matching = Object.values(predictions).filter(p => p.period === period && !p.is30s && !p.notified);
+            for (const pred of matching) {
+                const userId = pred.userId;
+                const isWin = (pred.predictedNum === number);
+                const isColorWin = (pred.predictedColor.includes(color) || color.includes(pred.predictedColor));
+                const isSizeWin = (pred.predictedSize === size);
+                
+                let resultMsg = '', emoji = '', jackpot = false;
+                if (isWin) {
+                    jackpot = true;
+                    emoji = '🎰 JACKPOT! 🎰';
+                    resultMsg = `✨ *EXACT NUMBER MATCH!* ✨\nYou predicted *${pred.predictedNum}* and the result was *${number}*!\n🎉 *JACKPOT WINNER!* 🎉`;
+                } else if (isColorWin && isSizeWin) {
+                    emoji = '✅ WIN';
+                    resultMsg = `✅ *WIN!* Both Color & Size correct!\nPredicted: ${pred.predictedColor} + ${pred.predictedSize}\nResult: ${color} + ${size}`;
+                } else if (isColorWin) {
+                    emoji = '✅ COLOR WIN';
+                    resultMsg = `✅ *COLOR WIN!*\nPredicted: ${pred.predictedColor}\nResult: ${color}`;
+                } else if (isSizeWin) {
+                    emoji = '✅ SIZE WIN';
+                    resultMsg = `✅ *SIZE WIN!*\nPredicted: ${pred.predictedSize}\nResult: ${size}`;
+                } else {
+                    emoji = '❌ LOSS';
+                    resultMsg = `❌ *LOSS*\nPredicted: ${pred.predictedNum} (${pred.predictedColor}, ${pred.predictedSize})\nResult: ${number} (${color}, ${size})`;
+                }
+                
+                const message = `
+🎲 *WINGO RESULT UPDATE* 🎲
+━━━━━━━━━━━━━━━━━━━━
+📌 *Period:* \`${period}\`
+${jackpot ? '━━━━━━━━━━━━━━━━━━━━\n' + resultMsg : ''}
+${!jackpot ? resultMsg : ''}
+━━━━━━━━━━━━━━━━━━━━
+📊 *Result:* ${number} – ${color} – ${size}
+🎯 *Your Prediction:* ${pred.predictedNum} – ${pred.predictedColor} – ${pred.predictedSize}
+━━━━━━━━━━━━━━━━━━━━
+${emoji}
+                `;
+                bot.sendMessage(userId, message, { parse_mode: 'Markdown' }).catch(() => {});
+                pred.notified = true;
+            }
+            // Update last processed period
+            if (!lastProcessedPeriod || period > lastProcessedPeriod) lastProcessedPeriod = period;
+            saveData();
+        }
+    } catch (err) {
+        console.error('Auto result fetch error:', err.message);
+    }
+}
+
+function startAutoResultChecker() {
+    if (autoResultInterval) clearInterval(autoResultInterval);
+    autoResultInterval = setInterval(fetchWingo1MResults, 15000); // every 15 seconds
+    console.log('Auto result checker started for 1-min WinGo');
+}
+
+// ── Quotex Functions (unchanged) ────────────────────────────────────────────────
 
 const QUOTEX_ASSETS = {
     'otc_eurusd': { name: 'EUR/USD (OTC)', type: 'OTC', digits: 5 },
@@ -210,7 +355,7 @@ function isAdminVerified(adminId) {
 
 function isPremium(userId) {
     if (!premiumUsers[userId]) return false;
-    if (Date.now() > premiumUsers[userId]) { delete premiumUsers[userId]; return false; }
+    if (Date.now() > premiumUsers[userId]) { delete premiumUsers[userId]; saveData(); return false; }
     return true;
 }
 
@@ -225,6 +370,7 @@ function incrementWingoFree(userId) {
         wingoFreeUsage[userId] = { date: today(), count: 0 };
     }
     wingoFreeUsage[userId].count++;
+    saveData();
 }
 
 function canGetWingoSignal(userId) {
@@ -245,6 +391,7 @@ function incrementQuotexFree(userId) {
         quotexFreeUsage[userId] = { date: today(), count: 0 };
     }
     quotexFreeUsage[userId].count++;
+    saveData();
 }
 
 function canGetQuotexSignal(userId) {
@@ -254,7 +401,7 @@ function canGetQuotexSignal(userId) {
     return { ok: false };
 }
 
-// ── Feedback Functions ──────────────────────────────────────────────────────────
+// ── Feedback Functions (unchanged) ──────────────────────────────────────────────
 
 function saveFeedback(userId, name, username, message, rating = null) {
     const feedbackId = feedbackCounter++;
@@ -268,6 +415,7 @@ function saveFeedback(userId, name, username, message, rating = null) {
         date: today(),
         time: new Date().toLocaleString()
     };
+    saveData();
     return feedbackId;
 }
 
@@ -278,12 +426,13 @@ function getAllFeedbacks() {
 function deleteFeedback(feedbackId) {
     if (feedbacks[feedbackId]) {
         delete feedbacks[feedbackId];
+        saveData();
         return true;
     }
     return false;
 }
 
-// ── Keyboards ────────────────────────────────────────────────────────────────────
+// ── Keyboards (unchanged) ───────────────────────────────────────────────────────
 
 function mainMenu(userId) {
     const isAdminUser = isAdmin(userId);
@@ -364,7 +513,7 @@ function getNextPredictionKeyboard(botType, context) {
     return null;
 }
 
-// ── Admin Panel Functions ────────────────────────────────────────────────────────
+// ── Admin Panel Functions (unchanged except no manual result button) ─────────────
 
 function cmdAdminLogin(msg) {
     const userId = msg.from.id;
@@ -399,8 +548,7 @@ function showAdminBanner(userId) {
         { parse_mode: 'Markdown' });
 }
 
-// ── Payment Approval Functions ───────────────────────────────────────────────────
-
+// Payment approval functions (unchanged)
 function showApprovePaymentMenu(adminId) {
     const pendings = Object.entries(pendingPayments);
     if (pendings.length === 0) {
@@ -449,6 +597,7 @@ function doApprovePayment(adminId, userIdToApprove) {
     const expiryDate = new Date(expiryTimestamp).toLocaleDateString();
     
     delete pendingPayments[targetId];
+    saveData();
     
     bot.sendMessage(adminId, 
         `✅ *PREMIUM ACTIVATED SUCCESSFULLY!*\n━━━━━━━━━━━━━━━━━━━━\n🆔 *User ID:* \`${targetId}\`\n📦 *Plan:* ${plan.name}\n📅 *Expires:* ${expiryDate}\n⏳ *Duration:* ${plan.days} days`,
@@ -462,8 +611,6 @@ function doApprovePayment(adminId, userIdToApprove) {
     
     userStates[adminId] = 'admin_panel';
 }
-
-// ── Other Admin Functions ────────────────────────────────────────────────────────
 
 function showRemovePremiumMenu(adminId) {
     const prems = Object.entries(premiumUsers);
@@ -499,6 +646,7 @@ function doRemovePremium(adminId, userIdToRemove) {
     }
     
     delete premiumUsers[targetId];
+    saveData();
     
     bot.sendMessage(adminId, `✅ Premium removed for user \`${targetId}\``, { parse_mode: 'Markdown', ...adminMenu() });
     bot.sendMessage(targetId, `⚠️ *Your premium has been removed.*\n\nContact admin if you think this is a mistake.`, mainMenu(targetId));
@@ -527,8 +675,6 @@ function doBroadcast(adminId, message) {
     
     userStates[adminId] = 'admin_panel';
 }
-
-// ── Feedback Admin Functions ─────────────────────────────────────────────────────
 
 function showAllFeedbacks(adminId) {
     const allFeedbacks = getAllFeedbacks();
@@ -561,7 +707,6 @@ function showAllFeedbacks(adminId) {
     
     bot.sendMessage(adminId, `💡 *Total Feedbacks:* ${allFeedbacks.length}\n\nTo delete feedback, use the button below 👇`, { parse_mode: 'Markdown' });
     
-    // Show delete option
     const deleteKeyboard = {
         reply_markup: {
             inline_keyboard: [
@@ -677,8 +822,6 @@ function showBotStats(adminId) {
         { parse_mode: 'Markdown' });
 }
 
-// ── Admin Panel Handler ─────────────────────────────────────────────────────────
-
 function handleAdminCommands(userId, text) {
     if (text === '🎲 WINGO: ✅ ON' || text === '🎲 WINGO: ❌ OFF') {
         toggleWingoStatus(userId);
@@ -711,84 +854,7 @@ function handleAdminCommands(userId, text) {
     }
 }
 
-// ── User Feedback Commands ──────────────────────────────────────────────────────
-
-function cmdFeedback(msg) {
-    const userId = msg.from.id;
-    userStates[userId] = 'waiting_feedback_message';
-    bot.sendMessage(userId,
-`💬 *SEND FEEDBACK*
-━━━━━━━━━━━━━━━━━━━━
-We value your opinion! Please share your feedback about the bot:
-
-• What do you like?
-• What can be improved?
-• Any issues you faced?
-• Suggestions for new features?
-
-👇 *Type your feedback message below:*`,
-        { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
-}
-
-function processFeedbackMessage(userId, name, username, message) {
-    // Save feedback first
-    const feedbackId = saveFeedback(userId, name, username, message);
-    
-    // Ask for rating
-    userStates[userId] = `waiting_feedback_rating:${feedbackId}`;
-    bot.sendMessage(userId,
-`✅ *Thank you for your feedback!* (ID: #${feedbackId})
-━━━━━━━━━━━━━━━━━━━━
-📝 Your feedback has been recorded.
-
-⭐ *Would you like to rate the bot?*
-Select your rating below:`,
-        { parse_mode: 'Markdown', ...feedbackRatingKeyboard() });
-}
-
-function processFeedbackRating(userId, ratingText, feedbackId) {
-    let rating = null;
-    if (ratingText.includes('1 Star')) rating = 1;
-    else if (ratingText.includes('2 Stars')) rating = 2;
-    else if (ratingText.includes('3 Stars')) rating = 3;
-    else if (ratingText.includes('4 Stars')) rating = 4;
-    else if (ratingText.includes('5 Stars')) rating = 5;
-    
-    if (rating && feedbacks[feedbackId]) {
-        feedbacks[feedbackId].rating = rating;
-        bot.sendMessage(userId,
-`⭐ *Rating saved!* (${rating} Stars)
-━━━━━━━━━━━━━━━━━━━━
-✅ Thank you for your valuable feedback!
-
-💡 Your feedback helps us improve the bot.
-━━━━━━━━━━━━━━━━━━━━
-*Admin will review your feedback soon.*`,
-            { parse_mode: 'Markdown', ...mainMenu(userId) });
-        
-        // Notify admin about new feedback
-        ADMIN_IDS.forEach(adminId => {
-            bot.sendMessage(adminId,
-`💬 *NEW FEEDBACK RECEIVED!*
-━━━━━━━━━━━━━━━━━━━━
-📝 *ID:* #${feedbackId}
-👤 *User:* ${name} (@${username || 'N/A'})
-🆔 *ID:* \`${userId}\`
-⭐ *Rating:* ${rating} Stars
-💬 *Message:* 
-${feedbacks[feedbackId].message}
-━━━━━━━━━━━━━━━━━━━━
-Use 👑 ADMIN PANEL → 💬 VIEW FEEDBACK`,
-                { parse_mode: 'Markdown' });
-        });
-    } else {
-        bot.sendMessage(userId, `✅ Thank you for your feedback!`, { parse_mode: 'Markdown', ...mainMenu(userId) });
-    }
-    
-    userStates[userId] = null;
-}
-
-// ── User Commands ───────────────────────────────────────────────────────────────
+// ── User Commands (modified to save predictions) ────────────────────────────────
 
 function cmdStart(msg) {
     const userId = msg.from.id;
@@ -798,6 +864,7 @@ function cmdStart(msg) {
     
     if (!allUsers[userId]) {
         allUsers[userId] = { name, username: uname, joinDate: today(), wingoPredictions: 0, quotexSignals: 0 };
+        saveData();
     }
     
     userStates[userId] = null;
@@ -867,11 +934,22 @@ function handleWingoPrediction(userId, periodStr, is30s) {
     const isPrem = isPremium(userId);
     if (!isPrem) incrementWingoFree(userId);
     if (allUsers[userId]) allUsers[userId].wingoPredictions = (allUsers[userId].wingoPredictions || 0) + 1;
+    saveData();
     
     const pred = wingoPredict(periodStr, isPrem);
     const gameMode = is30s ? '30 Sec WinGo' : '1 Min WinGo';
     const timeLeft = is30s ? getTimeLeft30s() : getTimeLeft1m();
     const remaining = isPrem ? '♾️ Unlimited' : `${WINGO_FREE_LIMIT - getWingoFreeUsed(userId)} left today`;
+    
+    // Save prediction for auto result (only for 1-min)
+    if (!is30s) {
+        savePrediction(userId, periodStr, pred.num, pred.color, pred.size, false, isPrem);
+    }
+    
+    let autoNote = '';
+    if (!is30s) {
+        autoNote = '\n━━━━━━━━━━━━━━━━━━━━\n_✅ You will be notified automatically when the result is declared._';
+    }
     
     bot.sendMessage(userId,
 `${BOT_NAME} - WINGO
@@ -887,10 +965,11 @@ ${isPrem ? '💎 PREMIUM' : '🆓 FREE'} PREDICTION
 📏 Size: *${pred.size}*
 💡 Confidence: ${pred.conf}
 ━━━━━━━━━━━━━━━━━━━━
-📊 Remaining: ${remaining}`,
+📊 Remaining: ${remaining}${autoNote}`,
         { parse_mode: 'Markdown', ...getNextPredictionKeyboard('wingo', is30s ? '30s' : '1m') });
 }
 
+// ── Quotex, Feedback, Payment commands (unchanged) ──────────────────────────────
 function cmdQuotexMenu(msg) {
     const userId = msg.from.id;
     if (!QUOTEX_ENABLED) {
@@ -975,6 +1054,7 @@ function cmdPaid(msg) {
     
     pendingPayments[userId] = { name, date: today(), plan: planKey, screenshot: false };
     userStates[userId] = null;
+    saveData();
     
     bot.sendMessage(userId, `✅ *Payment notification sent for ${PLANS[planKey].name}!*\n\nSend your payment screenshot here. Admin will verify within 1-2 hours.`, { parse_mode: 'Markdown' });
     
@@ -1013,8 +1093,9 @@ function cmdHelp(msg) {
 `❓ *HELP GUIDE*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 *🎲 WINGO PREDICTION:* ${WINGO_ENABLED ? '✅ ACTIVE' : '🚧 COMING SOON'}
+• 30 SEC – manual period entry, no auto result
+• 1 MIN – manual period entry, AUTO result & notification
 • Enter period number from WinGo game
-• Get number, color, size prediction
 
 *📊 QUOTEX SIGNALS:* ${QUOTEX_ENABLED ? '✅ ACTIVE' : '🚧 COMING SOON'}
 • OTC & Main currency pairs
@@ -1023,7 +1104,6 @@ function cmdHelp(msg) {
 *💬 FEEDBACK:*
 • Use 💬 FEEDBACK button
 • Share your experience
-• Help us improve the bot
 
 *👑 ADMIN CONTACT:* @GojoVipAdmin
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1033,7 +1113,80 @@ function cmdHelp(msg) {
         { parse_mode: 'Markdown', ...mainMenu(userId) });
 }
 
-// ── Main Message Handler ────────────────────────────────────────────────────────
+// ── Feedback Commands (unchanged) ──────────────────────────────────────────────
+function cmdFeedback(msg) {
+    const userId = msg.from.id;
+    userStates[userId] = 'waiting_feedback_message';
+    bot.sendMessage(userId,
+`💬 *SEND FEEDBACK*
+━━━━━━━━━━━━━━━━━━━━
+We value your opinion! Please share your feedback about the bot:
+
+• What do you like?
+• What can be improved?
+• Any issues you faced?
+• Suggestions for new features?
+
+👇 *Type your feedback message below:*`,
+        { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
+}
+
+function processFeedbackMessage(userId, name, username, message) {
+    const feedbackId = saveFeedback(userId, name, username, message);
+    userStates[userId] = `waiting_feedback_rating:${feedbackId}`;
+    bot.sendMessage(userId,
+`✅ *Thank you for your feedback!* (ID: #${feedbackId})
+━━━━━━━━━━━━━━━━━━━━
+📝 Your feedback has been recorded.
+
+⭐ *Would you like to rate the bot?*
+Select your rating below:`,
+        { parse_mode: 'Markdown', ...feedbackRatingKeyboard() });
+}
+
+function processFeedbackRating(userId, ratingText, feedbackId) {
+    let rating = null;
+    if (ratingText.includes('1 Star')) rating = 1;
+    else if (ratingText.includes('2 Stars')) rating = 2;
+    else if (ratingText.includes('3 Stars')) rating = 3;
+    else if (ratingText.includes('4 Stars')) rating = 4;
+    else if (ratingText.includes('5 Stars')) rating = 5;
+    
+    if (rating && feedbacks[feedbackId]) {
+        feedbacks[feedbackId].rating = rating;
+        saveData();
+        bot.sendMessage(userId,
+`⭐ *Rating saved!* (${rating} Stars)
+━━━━━━━━━━━━━━━━━━━━
+✅ Thank you for your valuable feedback!
+
+💡 Your feedback helps us improve the bot.
+━━━━━━━━━━━━━━━━━━━━
+*Admin will review your feedback soon.*`,
+            { parse_mode: 'Markdown', ...mainMenu(userId) });
+        
+        ADMIN_IDS.forEach(adminId => {
+            bot.sendMessage(adminId,
+`💬 *NEW FEEDBACK RECEIVED!*
+━━━━━━━━━━━━━━━━━━━━
+📝 *ID:* #${feedbackId}
+👤 *User:* ${name} (@${username || 'N/A'})
+🆔 *ID:* \`${userId}\`
+⭐ *Rating:* ${rating} Stars
+💬 *Message:* 
+${feedbacks[feedbackId].message}
+━━━━━━━━━━━━━━━━━━━━
+Use 👑 ADMIN PANEL → 💬 VIEW FEEDBACK`,
+                { parse_mode: 'Markdown' });
+        });
+    } else {
+        bot.sendMessage(userId, `✅ Thank you for your feedback!`, { parse_mode: 'Markdown', ...mainMenu(userId) });
+    }
+    
+    userStates[userId] = null;
+}
+
+// ── Main Message Handler (unchanged except auto result states not added) ─────────
 
 function handleMessage(msg) {
     const userId = msg.from.id;
@@ -1043,6 +1196,7 @@ function handleMessage(msg) {
     
     if (!allUsers[userId]) {
         allUsers[userId] = { name, username: uname, joinDate: today(), wingoPredictions: 0, quotexSignals: 0 };
+        saveData();
     }
     
     const state = userStates[userId] || '';
@@ -1062,37 +1216,14 @@ function handleMessage(msg) {
         return;
     }
     
-    // Admin approval handler
-    if (state === 'waiting_approve_id' && isAdmin(userId)) {
-        doApprovePayment(userId, text);
-        return;
-    }
+    // Admin approval/remove/broadcast/delete feedback
+    if (state === 'waiting_approve_id' && isAdmin(userId)) { doApprovePayment(userId, text); return; }
+    if (state === 'waiting_remove_id' && isAdmin(userId)) { doRemovePremium(userId, text); return; }
+    if (state === 'waiting_broadcast' && isAdmin(userId)) { doBroadcast(userId, text); return; }
+    if (state === 'waiting_delete_feedback' && isAdmin(userId)) { doDeleteFeedback(userId, text); return; }
+    if (state === 'admin_panel' && isAdmin(userId) && isAdminVerified(userId)) { handleAdminCommands(userId, text); return; }
     
-    // Admin remove handler
-    if (state === 'waiting_remove_id' && isAdmin(userId)) {
-        doRemovePremium(userId, text);
-        return;
-    }
-    
-    // Admin broadcast handler
-    if (state === 'waiting_broadcast' && isAdmin(userId)) {
-        doBroadcast(userId, text);
-        return;
-    }
-    
-    // Admin delete feedback handler
-    if (state === 'waiting_delete_feedback' && isAdmin(userId)) {
-        doDeleteFeedback(userId, text);
-        return;
-    }
-    
-    // Admin panel handler
-    if (state === 'admin_panel' && isAdmin(userId) && isAdminVerified(userId)) {
-        handleAdminCommands(userId, text);
-        return;
-    }
-    
-    // Feedback message handler
+    // Feedback handlers
     if (state === 'waiting_feedback_message') {
         if (text.length > 500) {
             bot.sendMessage(userId, '❌ Feedback is too long! Please keep it under 500 characters.', mainMenu(userId));
@@ -1102,11 +1233,9 @@ function handleMessage(msg) {
         processFeedbackMessage(userId, name, uname, text);
         return;
     }
-    
-    // Feedback rating handler
     if (state && state.startsWith('waiting_feedback_rating:')) {
         const feedbackId = parseInt(state.split(':')[1]);
-        if (text.includes('Star') || text.includes('BACK')) {
+        if (text.includes('Star') || text === '🔙 MAIN MENU') {
             if (text === '🔙 MAIN MENU') {
                 userStates[userId] = null;
                 bot.sendMessage(userId, 'Main Menu:', mainMenu(userId));
@@ -1120,28 +1249,17 @@ function handleMessage(msg) {
         return;
     }
     
-    // Next prediction handler
-    if (text === '🔄 NEXT 30 SEC PREDICTION') {
-        cmdWingo30({ from: { id: userId } });
-        return;
-    }
-    if (text === '🔄 NEXT 1 MIN PREDICTION') {
-        cmdWingo1m({ from: { id: userId } });
-        return;
-    }
-    if (text === '🔙 BACK TO WINGO MENU') {
-        cmdWingoMenu({ from: { id: userId } });
-        return;
-    }
-    
-    // Main menu navigation
+    // Next prediction buttons
+    if (text === '🔄 NEXT 30 SEC PREDICTION') { cmdWingo30({ from: { id: userId } }); return; }
+    if (text === '🔄 NEXT 1 MIN PREDICTION') { cmdWingo1m({ from: { id: userId } }); return; }
+    if (text === '🔙 BACK TO WINGO MENU') { cmdWingoMenu({ from: { id: userId } }); return; }
     if (text === '🏠 MAIN MENU' || text === '🔙 MAIN MENU') {
         userStates[userId] = null;
         bot.sendMessage(userId, 'Main Menu:', mainMenu(userId));
         return;
     }
     
-    // Wingo prediction handlers
+    // Wingo period input
     if (state === 'wingo_30s_predict' && /^\d{8,14}$/.test(text)) {
         handleWingoPrediction(userId, text, true);
         userStates[userId] = null;
@@ -1182,6 +1300,7 @@ bot.on('photo', (msg) => {
     
     if (pendingPayments[userId]) {
         pendingPayments[userId].screenshot = true;
+        saveData();
         bot.sendMessage(userId, '✅ *Screenshot received!* Admin will verify within 1-2 hours. Thank you! 🙏', { parse_mode: 'Markdown' });
         
         ADMIN_IDS.forEach(adminId => {
@@ -1202,9 +1321,13 @@ bot.on('message', (msg) => {
     handleMessage(msg);
 });
 
-console.log('🚀 UNIFIED TRADING BOT v2.4 (WITH FEEDBACK SYSTEM) is running!');
+// Start the auto result checker
+startAutoResultChecker();
+
+console.log('🚀 UNIFIED TRADING BOT v2.5 (AUTO 1‑MIN RESULTS) is running!');
 console.log(`👑 Admin IDs: ${ADMIN_IDS.join(', ')}`);
 console.log(`💰 Plans: ${Object.keys(PLANS).join(', ')}`);
 console.log(`🎲 WINGO: ${WINGO_ENABLED ? 'ENABLED' : 'DISABLED'}`);
 console.log(`📊 QUOTEX: ${QUOTEX_ENABLED ? 'ENABLED' : 'DISABLED'}`);
 console.log(`💬 Feedback system: ACTIVE`);
+console.log(`🤖 Auto 1‑min WinGo result fetcher: ACTIVE`);
