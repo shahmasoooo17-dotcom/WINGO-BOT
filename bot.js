@@ -1331,3 +1331,20 @@ console.log(`🎲 WINGO: ${WINGO_ENABLED ? 'ENABLED' : 'DISABLED'}`);
 console.log(`📊 QUOTEX: ${QUOTEX_ENABLED ? 'ENABLED' : 'DISABLED'}`);
 console.log(`💬 Feedback system: ACTIVE`);
 console.log(`🤖 Auto 1‑min WinGo result fetcher: ACTIVE`);
+
+// ── Railway health check server (keeps bot alive) ──
+const express = require('express');
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+    res.send('Bot is running!');
+});
+
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
+
+app.listen(PORT, () => {
+    console.log(`Health server running on port ${PORT}`);
+});
