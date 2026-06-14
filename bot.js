@@ -1,12 +1,11 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// UNIFIED TRADING BOT v2.2
+// UNIFIED TRADING BOT v2.4 - WITH FEEDBACK SYSTEM
+// - Complete payment approval system (FIXED)
+// - Feedback system (users can send feedback)
+// - Admin can view all feedback
 // - WINGO PREDICTION BOT (30s/1m predictions)
-// - QUOTEX SIGNAL BOT (OTC/Main assets with multiple timeframes)
-// - ON/OFF toggle system for both bots (Admin Panel)
-// - "Coming Soon" message when Quotex is OFF
+// - QUOTEX SIGNAL BOT (with ON/OFF toggle)
 // - Multi-plan premium subscriptions (2d, 1w, 2w, 1m)
-// - "Next Prediction" button after each signal
-// - Admin Button in main menu (only visible to admins)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 const TelegramBot = require('node-telegram-bot-api');
@@ -16,7 +15,7 @@ const TelegramBot = require('node-telegram-bot-api');
 // ═════════════════════════════════════════════════════════════════════════════════
 
 const BOT_TOKEN = '8425112915:AAE_RNh0tDnXRp3ULKciTPuqIjuiSoNfQtE';
-const ADMIN_IDS = [7592032793];        // Your Telegram numeric ID - Add multiple if needed: [7592032793, 123456789, 987654321]
+const ADMIN_IDS = [7592032793];        // Your Telegram numeric ID
 
 // 🔐 Admin Panel Password
 const ADMIN_PASSWORD = 'Masoodking123';
@@ -33,8 +32,8 @@ const PLANS = {
 };
 
 // Free daily limits
-const WINGO_FREE_LIMIT = 5;      // Wingo: 5 free predictions/day
-const QUOTEX_FREE_LIMIT = 3;     // Quotex: 3 free signals/day
+const WINGO_FREE_LIMIT = 5;
+const QUOTEX_FREE_LIMIT = 3;
 
 // Payment Details
 const EASYPAISA_NUMBER = '0318-0939237';
@@ -44,30 +43,29 @@ const ACCOUNT_NAME = 'MUHAMMAD ABID SHAH';
 // Timezone for Quotex chart (UTC+3)
 const CHART_TIMEZONE = 'UTC+3';
 
-// ═════════════════════════════════════════════════════════════════════════════════
-// ON/OFF TOGGLES - Admin can change these from panel
-// ═════════════════════════════════════════════════════════════════════════════════
-
-let WINGO_ENABLED = true;      // Set to false to disable Wingo bot
-let QUOTEX_ENABLED = false;    // Set to false to disable Quotex bot (currently OFF)
+// ON/OFF TOGGLES
+let WINGO_ENABLED = true;
+let QUOTEX_ENABLED = false;
 
 // ═════════════════════════════════════════════════════════════════════════════════
-// DO NOT CHANGE BELOW (unless you know what you're doing)
+// DO NOT CHANGE BELOW
 // ═════════════════════════════════════════════════════════════════════════════════
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 // ── Storage ──────────────────────────────────────────────────────────────────────
-const premiumUsers    = {};  // { userId: expiryTimestamp }
-const wingoFreeUsage  = {};  // { userId: { date, count } }
-const quotexFreeUsage = {};  // { userId: { date, count } }
-const userStates      = {};  // { userId: state_string }
-const userLastAction  = {};  // { userId: { botType, assetKey, timeframe, is30s } }
-const pendingPayments = {};  // { userId: { name, date, plan, screenshot } }
-const allUsers        = {};  // { userId: { name, username, joinDate, wingoPredictions, quotexSignals } }
-const adminSessions   = {};  // { adminId: { verified: bool, expiry: timestamp } }
+const premiumUsers    = {};
+const wingoFreeUsage  = {};
+const quotexFreeUsage = {};
+const userStates      = {};
+const userLastAction  = {};
+const pendingPayments = {};
+const allUsers        = {};
+const adminSessions   = {};
+const feedbacks       = {};  // { feedbackId: { userId, name, username, message, date, rating } }
+let feedbackCounter   = 1;
 
-// ── Wingo Assets & Timeframes ────────────────────────────────────────────────────
+// ── Wingo Functions ──────────────────────────────────────────────────────────────
 
 function getCurrentPeriod30s() {
     const n = new Date();
@@ -109,7 +107,7 @@ function wingoPredict(periodStr, isPrem) {
     return { num, color, size, conf };
 }
 
-// ── Quotex Assets & Timeframes ───────────────────────────────────────────────────
+// ── Quotex Functions ────────────────────────────────────────────────────────────
 
 const QUOTEX_ASSETS = {
     'otc_eurusd': { name: 'EUR/USD (OTC)', type: 'OTC', digits: 5 },
@@ -216,18 +214,19 @@ function isPremium(userId) {
     return true;
 }
 
-// Wingo free usage
 function getWingoFreeUsed(userId) {
     const u = wingoFreeUsage[userId];
     if (!u || u.date !== today()) return 0;
     return u.count;
 }
+
 function incrementWingoFree(userId) {
     if (!wingoFreeUsage[userId] || wingoFreeUsage[userId].date !== today()) {
         wingoFreeUsage[userId] = { date: today(), count: 0 };
     }
     wingoFreeUsage[userId].count++;
 }
+
 function canGetWingoSignal(userId) {
     if (isPremium(userId)) return { ok: true };
     const used = getWingoFreeUsed(userId);
@@ -235,18 +234,19 @@ function canGetWingoSignal(userId) {
     return { ok: false };
 }
 
-// Quotex free usage
 function getQuotexFreeUsed(userId) {
     const u = quotexFreeUsage[userId];
     if (!u || u.date !== today()) return 0;
     return u.count;
 }
+
 function incrementQuotexFree(userId) {
     if (!quotexFreeUsage[userId] || quotexFreeUsage[userId].date !== today()) {
         quotexFreeUsage[userId] = { date: today(), count: 0 };
     }
     quotexFreeUsage[userId].count++;
 }
+
 function canGetQuotexSignal(userId) {
     if (isPremium(userId)) return { ok: true };
     const used = getQuotexFreeUsed(userId);
@@ -254,32 +254,89 @@ function canGetQuotexSignal(userId) {
     return { ok: false };
 }
 
-// ── Coming Soon Message for Quotex ───────────────────────────────────────────────
+// ── Feedback Functions ──────────────────────────────────────────────────────────
 
-function showQuotexComingSoon(userId) {
-    bot.sendMessage(userId,
-`🚧 *QUOTEX SIGNALS - COMING SOON!* 🚧
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 *QUOTEX SIGNAL SYSTEM IS CURRENTLY BEING UPDATED*
-
-🔄 *Expected Features:*
-• OTC & Main currency pairs
-• Multiple timeframes (1m to 1h)
-• Real-time signals with UTC+3 times
-• High accuracy predictions
-
-⏰ *Estimated Launch:* Soon
-
-💎 *Premium users will get priority access!*
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎲 *Meanwhile, try WINGO PREDICTION!*
-Use the button below 👇`,
-        { parse_mode: 'Markdown', ...mainMenu(userId) }
-    );
+function saveFeedback(userId, name, username, message, rating = null) {
+    const feedbackId = feedbackCounter++;
+    feedbacks[feedbackId] = {
+        id: feedbackId,
+        userId: userId,
+        name: name,
+        username: username || 'N/A',
+        message: message,
+        rating: rating,
+        date: today(),
+        time: new Date().toLocaleString()
+    };
+    return feedbackId;
 }
 
-// ── Next Prediction Keyboard ─────────────────────────────────────────────────────
+function getAllFeedbacks() {
+    return Object.values(feedbacks).reverse();
+}
+
+function deleteFeedback(feedbackId) {
+    if (feedbacks[feedbackId]) {
+        delete feedbacks[feedbackId];
+        return true;
+    }
+    return false;
+}
+
+// ── Keyboards ────────────────────────────────────────────────────────────────────
+
+function mainMenu(userId) {
+    const isAdminUser = isAdmin(userId);
+    let keyboard = [
+        ['🎲 WINGO PREDICTION', '📊 QUOTEX SIGNALS'],
+        ['💎 BUY PREMIUM', '📊 MY ACCOUNT'],
+        ['❓ HELP', '💬 FEEDBACK']
+    ];
+    if (isAdminUser) {
+        keyboard.push(['👑 ADMIN PANEL']);
+    }
+    return { reply_markup: { keyboard: keyboard, resize_keyboard: true } };
+}
+
+function wingoMenu() {
+    return {
+        reply_markup: {
+            keyboard: [['🎯 30 SEC PREDICT', '🎯 1 MIN PREDICT'], ['🔙 MAIN MENU']],
+            resize_keyboard: true
+        }
+    };
+}
+
+function feedbackRatingKeyboard() {
+    return {
+        reply_markup: {
+            keyboard: [
+                ['⭐ 1 Star', '⭐⭐ 2 Stars', '⭐⭐⭐ 3 Stars'],
+                ['⭐⭐⭐⭐ 4 Stars', '⭐⭐⭐⭐⭐ 5 Stars'],
+                ['🔙 MAIN MENU']
+            ],
+            resize_keyboard: true
+        }
+    };
+}
+
+function adminMenu() {
+    const wingoStatus = WINGO_ENABLED ? '✅ ON' : '❌ OFF';
+    const quotexStatus = QUOTEX_ENABLED ? '✅ ON' : '❌ OFF';
+    return {
+        reply_markup: {
+            keyboard: [
+                ['👥 ALL USERS', '💎 PREMIUM USERS'],
+                ['💰 PENDING PAYMENTS', '✅ APPROVE PAYMENT'],
+                ['❌ REMOVE PREMIUM', '📢 BROADCAST'],
+                ['📊 BOT STATS', '💬 VIEW FEEDBACK'],
+                [`🎲 WINGO: ${wingoStatus}`, `📊 QUOTEX: ${quotexStatus}`],
+                ['🚪 EXIT ADMIN']
+            ],
+            resize_keyboard: true
+        }
+    };
+}
 
 function getNextPredictionKeyboard(botType, context) {
     if (botType === 'wingo') {
@@ -307,135 +364,28 @@ function getNextPredictionKeyboard(botType, context) {
     return null;
 }
 
-// ── Main Menu Keyboard (Admin button visible only to admins) ─────────────────────
-
-function mainMenu(userId) {
-    const isPrem = isPremium(userId);
-    const isAdminUser = isAdmin(userId);
-    
-    // Create base keyboard
-    let keyboard = [
-        ['🎲 WINGO PREDICTION', '📊 QUOTEX SIGNALS'],
-        ['💎 BUY PREMIUM', '📊 MY ACCOUNT'],
-        ['❓ HELP']
-    ];
-    
-    // Add Admin button only if user is admin
-    if (isAdminUser) {
-        keyboard.push(['👑 ADMIN PANEL']);
-    }
-    
-    return {
-        reply_markup: {
-            keyboard: keyboard,
-            resize_keyboard: true
-        }
-    };
-}
-
-function wingoMenu() {
-    return {
-        reply_markup: {
-            keyboard: [
-                ['🎯 30 SEC PREDICT', '🎯 1 MIN PREDICT'],
-                ['🔙 MAIN MENU']
-            ],
-            resize_keyboard: true
-        }
-    };
-}
-
-function quotexMainMenu() {
-    return {
-        reply_markup: {
-            keyboard: [
-                ['📈 OTC SIGNAL', '💱 MAIN SIGNAL'],
-                ['⏱️ TIMEFRAMES', '🔙 MAIN MENU']
-            ],
-            resize_keyboard: true
-        }
-    };
-}
-
-function quotexAssetKeyboard(assetType) {
-    let assets = [];
-    if (assetType === 'OTC') {
-        assets = ['EUR/USD (OTC)', 'GBP/USD (OTC)', 'USD/JPY (OTC)', 'AUD/USD (OTC)', 'BTC/USD (OTC)', '🔙 BACK'];
-    } else {
-        assets = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD', 'BTC/USD', '🔙 BACK'];
-    }
-    return {
-        reply_markup: {
-            keyboard: [assets.slice(0, 3), assets.slice(3, 6)],
-            resize_keyboard: true
-        }
-    };
-}
-
-function timeframeKeyboard() {
-    return {
-        reply_markup: {
-            keyboard: [['1 MINUTE', '5 MINUTES', '15 MINUTES'], ['30 MINUTES', '1 HOUR'], ['🔙 BACK TO QUOTEX']],
-            resize_keyboard: true
-        }
-    };
-}
-
-function adminMenu() {
-    // Show current status of both bots
-    const wingoStatus = WINGO_ENABLED ? '✅ ON' : '❌ OFF';
-    const quotexStatus = QUOTEX_ENABLED ? '✅ ON' : '❌ OFF';
-    
-    return {
-        reply_markup: {
-            keyboard: [
-                ['👥 ALL USERS', '💎 PREMIUM USERS'],
-                ['💰 PENDING PAYMENTS', '✅ APPROVE PAYMENT'],
-                ['❌ REMOVE PREMIUM', '📢 BROADCAST'],
-                ['📊 BOT STATS'],
-                [`🎲 WINGO: ${wingoStatus}`, `📊 QUOTEX: ${quotexStatus}`],
-                ['🚪 EXIT ADMIN']
-            ],
-            resize_keyboard: true
-        }
-    };
-}
-
-// ── Admin Panel ──────────────────────────────────────────────────────────────────
+// ── Admin Panel Functions ────────────────────────────────────────────────────────
 
 function cmdAdminLogin(msg) {
     const userId = msg.from.id;
-    
-    // Check if user is admin
     if (!isAdmin(userId)) {
-        return bot.sendMessage(userId, 
-            `❌ *ACCESS DENIED!*\n\nYou are not authorized to access the admin panel.\n\nOnly registered admins can use this feature.`,
-            { parse_mode: 'Markdown', ...mainMenu(userId) }
-        );
+        return bot.sendMessage(userId, '❌ *ACCESS DENIED!*\n\nYou are not authorized.', { parse_mode: 'Markdown', ...mainMenu(userId) });
     }
-    
-    // If already verified, open admin panel
     if (isAdminVerified(userId)) {
         userStates[userId] = 'admin_panel';
-        return showAdminBanner(userId).then(() => bot.sendMessage(userId, '✅ Already logged in!', adminMenu()));
+        showAdminBanner(userId);
+        return bot.sendMessage(userId, '✅ Already logged in!', adminMenu());
     }
-    
-    // Request password
     userStates[userId] = 'waiting_admin_password';
-    bot.sendMessage(userId, 
-        `👑 *ADMIN LOGIN*\n━━━━━━━━━━━━━━━━━━━━\n🔐 Enter your admin password to access the panel:`,
-        { parse_mode: 'Markdown', reply_markup: { force_reply: true } }
-    );
+    bot.sendMessage(userId, '🔐 *ADMIN LOGIN*\n━━━━━━━━━━━━━━━━━━━━\nEnter your admin password:', { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
 }
 
 function showAdminBanner(userId) {
     const premCount = Object.keys(premiumUsers).length;
     const userCount = Object.keys(allUsers).length;
     const pendCount = Object.keys(pendingPayments).length;
-    const wingoStatus = WINGO_ENABLED ? '✅ ACTIVE' : '❌ DISABLED';
-    const quotexStatus = QUOTEX_ENABLED ? '✅ ACTIVE' : '❌ DISABLED';
-    
-    return bot.sendMessage(userId,
+    const feedbackCount = Object.keys(feedbacks).length;
+    bot.sendMessage(userId,
 `╔════════════════════════════════════════╗
 ║           🛡️ UNIFIED ADMIN PANEL           ║
 ║              ${BOT_NAME}
@@ -443,22 +393,224 @@ function showAdminBanner(userId) {
 ║ 👥 TOTAL USERS   : ${String(userCount).padEnd(5)}║
 ║ 💎 PREMIUM       : ${String(premCount).padEnd(5)}║
 ║ 💰 PENDING PAY   : ${String(pendCount).padEnd(5)}║
+║ 💬 TOTAL FEEDBACK: ${String(feedbackCount).padEnd(5)}║
 ║ 📅 DATE          : ${today()} ║
-╠════════════════════════════════════════╣
-║ 🎲 WINGO STATUS  : ${wingoStatus.padEnd(10)}║
-║ 📊 QUOTEX STATUS : ${quotexStatus.padEnd(10)}║
-╚════════════════════════════════════════╝
-Click buttons below to toggle bots ON/OFF 👇`,
-        adminMenu());
+╚════════════════════════════════════════╝`,
+        { parse_mode: 'Markdown' });
 }
 
-// ── Toggle Bot Status Functions ─────────────────────────────────────────────────
+// ── Payment Approval Functions ───────────────────────────────────────────────────
+
+function showApprovePaymentMenu(adminId) {
+    const pendings = Object.entries(pendingPayments);
+    if (pendings.length === 0) {
+        return bot.sendMessage(adminId, '✅ No pending payments to approve!', adminMenu());
+    }
+    
+    let message = `✅ *APPROVE PAYMENT*\n━━━━━━━━━━━━━━━━━━━━\n📋 *Pending Users:*\n\n`;
+    pendings.forEach(([id, p]) => {
+        const planInfo = PLANS[p.plan] || { name: p.plan, price: '?' };
+        message += `🆔 *ID:* \`${id}\`\n👤 *Name:* ${p.name}\n📦 *Plan:* ${planInfo.name} (PKR ${planInfo.price})\n📅 *Date:* ${p.date}\n━━━━━━━━━━━━━━━━━━━━\n`;
+    });
+    message += `\n👇 *Enter the User ID to approve payment:*`;
+    
+    userStates[adminId] = 'waiting_approve_id';
+    bot.sendMessage(adminId, message, { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
+}
+
+function doApprovePayment(adminId, userIdToApprove) {
+    const targetId = parseInt(userIdToApprove);
+    
+    if (isNaN(targetId)) {
+        bot.sendMessage(adminId, '❌ Invalid ID! Please enter a numeric User ID.', adminMenu());
+        userStates[adminId] = 'admin_panel';
+        return;
+    }
+    
+    const pending = pendingPayments[targetId];
+    
+    if (!pending) {
+        bot.sendMessage(adminId, `❌ No pending payment found for ID: ${targetId}\n\nMake sure the user has sent /paid command first.`, adminMenu());
+        userStates[adminId] = 'admin_panel';
+        return;
+    }
+    
+    const planKey = pending.plan;
+    const plan = PLANS[planKey];
+    
+    if (!plan) {
+        bot.sendMessage(adminId, `❌ Invalid plan for user ${targetId}`, adminMenu());
+        userStates[adminId] = 'admin_panel';
+        return;
+    }
+    
+    const expiryTimestamp = Date.now() + (plan.days * 24 * 60 * 60 * 1000);
+    premiumUsers[targetId] = expiryTimestamp;
+    const expiryDate = new Date(expiryTimestamp).toLocaleDateString();
+    
+    delete pendingPayments[targetId];
+    
+    bot.sendMessage(adminId, 
+        `✅ *PREMIUM ACTIVATED SUCCESSFULLY!*\n━━━━━━━━━━━━━━━━━━━━\n🆔 *User ID:* \`${targetId}\`\n📦 *Plan:* ${plan.name}\n📅 *Expires:* ${expiryDate}\n⏳ *Duration:* ${plan.days} days`,
+        { parse_mode: 'Markdown', ...adminMenu() }
+    );
+    
+    bot.sendMessage(targetId,
+        `🎉 *PREMIUM ACTIVATED!* 🎉\n━━━━━━━━━━━━━━━━━━━━\n✅ Your payment has been verified!\n\n📦 *Plan:* ${plan.name}\n📅 *Expires:* ${expiryDate}\n⏳ *Duration:* ${plan.days} days\n━━━━━━━━━━━━━━━━━━━━\n🎲 *Wingo Predictions:* Unlimited\n📊 *Quotex Signals:* Unlimited\n━━━━━━━━━━━━━━━━━━━━\nThank you for your purchase! 🙏`,
+        { parse_mode: 'Markdown', ...mainMenu(targetId) }
+    ).catch(err => console.log('Error notifying user:', err.message));
+    
+    userStates[adminId] = 'admin_panel';
+}
+
+// ── Other Admin Functions ────────────────────────────────────────────────────────
+
+function showRemovePremiumMenu(adminId) {
+    const prems = Object.entries(premiumUsers);
+    if (prems.length === 0) {
+        return bot.sendMessage(adminId, '📭 No premium users to remove!', adminMenu());
+    }
+    
+    let message = `❌ *REMOVE PREMIUM*\n━━━━━━━━━━━━━━━━━━━━\n📋 *Premium Users:*\n\n`;
+    prems.forEach(([id, exp]) => {
+        const u = allUsers[id] || { name: 'Unknown' };
+        const daysLeft = Math.ceil((exp - Date.now()) / 86400000);
+        message += `🆔 *ID:* \`${id}\`\n👤 *Name:* ${u.name}\n⏳ *Days Left:* ${daysLeft}\n━━━━━━━━━━━━━━━━━━━━\n`;
+    });
+    message += `\n👇 *Enter the User ID to remove premium:*`;
+    
+    userStates[adminId] = 'waiting_remove_id';
+    bot.sendMessage(adminId, message, { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
+}
+
+function doRemovePremium(adminId, userIdToRemove) {
+    const targetId = parseInt(userIdToRemove);
+    
+    if (isNaN(targetId)) {
+        bot.sendMessage(adminId, '❌ Invalid ID! Please enter a numeric User ID.', adminMenu());
+        userStates[adminId] = 'admin_panel';
+        return;
+    }
+    
+    if (!premiumUsers[targetId]) {
+        bot.sendMessage(adminId, `❌ User ID ${targetId} is not a premium user.`, adminMenu());
+        userStates[adminId] = 'admin_panel';
+        return;
+    }
+    
+    delete premiumUsers[targetId];
+    
+    bot.sendMessage(adminId, `✅ Premium removed for user \`${targetId}\``, { parse_mode: 'Markdown', ...adminMenu() });
+    bot.sendMessage(targetId, `⚠️ *Your premium has been removed.*\n\nContact admin if you think this is a mistake.`, mainMenu(targetId));
+    
+    userStates[adminId] = 'admin_panel';
+}
+
+function showBroadcastMenu(adminId) {
+    userStates[adminId] = 'waiting_broadcast';
+    bot.sendMessage(adminId, '📢 *BROADCAST MESSAGE*\n━━━━━━━━━━━━━━━━━━━━\n👇 Type your message to send to ALL users:', { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
+}
+
+function doBroadcast(adminId, message) {
+    const userIds = Object.keys(allUsers);
+    let sent = 0;
+    
+    userIds.forEach(uid => {
+        bot.sendMessage(Number(uid), `📢 *ADMIN BROADCAST*\n━━━━━━━━━━━━━━━━━━━━\n${message}`, { parse_mode: 'Markdown' })
+            .then(() => sent++)
+            .catch(() => {});
+    });
+    
+    setTimeout(() => {
+        bot.sendMessage(adminId, `✅ Broadcast sent to *${sent}* out of ${userIds.length} users.`, { parse_mode: 'Markdown', ...adminMenu() });
+    }, 2000);
+    
+    userStates[adminId] = 'admin_panel';
+}
+
+// ── Feedback Admin Functions ─────────────────────────────────────────────────────
+
+function showAllFeedbacks(adminId) {
+    const allFeedbacks = getAllFeedbacks();
+    
+    if (allFeedbacks.length === 0) {
+        return bot.sendMessage(adminId, '💬 *No feedback received yet!*\n\nUsers can send feedback using the 💬 FEEDBACK button.', { parse_mode: 'Markdown', ...adminMenu() });
+    }
+    
+    let message = `💬 *ALL FEEDBACKS* (${allFeedbacks.length})\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    
+    allFeedbacks.forEach((fb, index) => {
+        const ratingStars = fb.rating ? '⭐'.repeat(fb.rating) : 'No rating';
+        message += `📝 *Feedback #${fb.id}*\n`;
+        message += `👤 *User:* ${fb.name} (@${fb.username})\n`;
+        message += `🆔 *ID:* \`${fb.userId}\`\n`;
+        message += `⭐ *Rating:* ${ratingStars}\n`;
+        message += `📅 *Date:* ${fb.date}\n`;
+        message += `💬 *Message:*\n${fb.message}\n`;
+        message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        
+        if ((index + 1) % 5 === 0 && index + 1 < allFeedbacks.length) {
+            bot.sendMessage(adminId, message, { parse_mode: 'Markdown' });
+            message = '';
+        }
+    });
+    
+    if (message) {
+        bot.sendMessage(adminId, message, { parse_mode: 'Markdown' });
+    }
+    
+    bot.sendMessage(adminId, `💡 *Total Feedbacks:* ${allFeedbacks.length}\n\nTo delete feedback, use the button below 👇`, { parse_mode: 'Markdown' });
+    
+    // Show delete option
+    const deleteKeyboard = {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '🗑️ DELETE SPECIFIC FEEDBACK', callback_data: 'admin_delete_feedback' }]
+            ]
+        }
+    };
+    bot.sendMessage(adminId, `🗑️ *Delete Feedback*`, deleteKeyboard);
+}
+
+function showDeleteFeedbackMenu(adminId) {
+    const allFeedbacks = getAllFeedbacks();
+    if (allFeedbacks.length === 0) {
+        return bot.sendMessage(adminId, 'No feedback to delete.', adminMenu());
+    }
+    
+    let message = `🗑️ *DELETE FEEDBACK*\n━━━━━━━━━━━━━━━━━━━━\nEnter the feedback ID number to delete:\n\n`;
+    allFeedbacks.forEach(fb => {
+        message += `📝 ID: *${fb.id}* - from ${fb.name} (${fb.date})\n`;
+    });
+    message += `\n👇 *Enter Feedback ID to delete:*`;
+    
+    userStates[adminId] = 'waiting_delete_feedback';
+    bot.sendMessage(adminId, message, { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
+}
+
+function doDeleteFeedback(adminId, feedbackId) {
+    const id = parseInt(feedbackId);
+    if (isNaN(id)) {
+        bot.sendMessage(adminId, '❌ Invalid ID! Please enter a numeric Feedback ID.', adminMenu());
+        userStates[adminId] = 'admin_panel';
+        return;
+    }
+    
+    if (deleteFeedback(id)) {
+        bot.sendMessage(adminId, `✅ Feedback #${id} deleted successfully!`, adminMenu());
+    } else {
+        bot.sendMessage(adminId, `❌ Feedback #${id} not found!`, adminMenu());
+    }
+    
+    userStates[adminId] = 'admin_panel';
+}
 
 function toggleWingoStatus(adminId) {
     WINGO_ENABLED = !WINGO_ENABLED;
     const status = WINGO_ENABLED ? 'ENABLED ✅' : 'DISABLED ❌';
     bot.sendMessage(adminId, `🎲 *WINGO BOT ${status}*`, { parse_mode: 'Markdown' });
     showAdminBanner(adminId);
+    bot.sendMessage(adminId, 'Admin Panel:', adminMenu());
 }
 
 function toggleQuotexStatus(adminId) {
@@ -466,35 +618,222 @@ function toggleQuotexStatus(adminId) {
     const status = QUOTEX_ENABLED ? 'ENABLED ✅' : 'DISABLED ❌';
     bot.sendMessage(adminId, `📊 *QUOTEX BOT ${status}*`, { parse_mode: 'Markdown' });
     showAdminBanner(adminId);
+    bot.sendMessage(adminId, 'Admin Panel:', adminMenu());
 }
 
-// ── Wingo Commands ──────────────────────────────────────────────────────────────
+function showAllUsers(adminId) {
+    const users = Object.entries(allUsers);
+    if (users.length === 0) return bot.sendMessage(adminId, '📭 No users yet.');
+    let out = `👥 *ALL USERS* (${users.length})\n━━━━━━━━━━━━━━━━━━━━\n`;
+    users.slice(0, 30).forEach(([id, u]) => {
+        const plan = isPremium(Number(id)) ? '💎' : '🆓';
+        out += `${plan} *${u.name}* (@${u.username})\n🆔 \`${id}\`\n📊 Wingo:${u.wingoPredictions || 0} Quotex:${u.quotexSignals || 0}\n\n`;
+    });
+    if (users.length > 30) out += `_... and ${users.length - 30} more_`;
+    bot.sendMessage(adminId, out, { parse_mode: 'Markdown' });
+}
 
-function cmdWingoMenu(msg) {
-    const userId = msg.from.id;
+function showPremiumUsers(adminId) {
+    const prems = Object.entries(premiumUsers);
+    if (prems.length === 0) return bot.sendMessage(adminId, '📭 No premium users.');
+    let out = `💎 *PREMIUM USERS* (${prems.length})\n━━━━━━━━━━━━━━━━━━━━\n`;
+    prems.forEach(([id, exp]) => {
+        const u = allUsers[id] || { name: 'Unknown' };
+        const daysLeft = Math.ceil((exp - Date.now()) / 86400000);
+        out += `💎 *${u.name}* (@${u.username || 'N/A'})\n🆔 \`${id}\`\n⏳ ${daysLeft} days left\n\n`;
+    });
+    bot.sendMessage(adminId, out, { parse_mode: 'Markdown' });
+}
+
+function showPendingPayments(adminId) {
+    const pendings = Object.entries(pendingPayments);
+    if (pendings.length === 0) return bot.sendMessage(adminId, '✅ No pending payments!');
+    let out = `💰 *PENDING PAYMENTS* (${pendings.length})\n━━━━━━━━━━━━━━━━━━━━\n`;
+    pendings.forEach(([id, p]) => {
+        const planInfo = PLANS[p.plan] || { name: p.plan, price: '?' };
+        out += `👤 *${p.name}*\n🆔 \`${id}\`\n📦 ${planInfo.name} (PKR ${planInfo.price})\n📅 ${p.date}\n\n`;
+    });
+    bot.sendMessage(adminId, out, { parse_mode: 'Markdown' });
+}
+
+function showBotStats(adminId) {
+    const premCount = Object.keys(premiumUsers).length;
+    const userCount = Object.keys(allUsers).length;
+    const pendCount = Object.keys(pendingPayments).length;
+    const feedbackCount = Object.keys(feedbacks).length;
+    bot.sendMessage(adminId,
+`📊 *BOT STATISTICS*
+━━━━━━━━━━━━━━━━━━━━
+👥 Total Users    : *${userCount}*
+💎 Premium Users  : *${premCount}*
+🆓 Free Users     : *${userCount - premCount}*
+💰 Pending Pay    : *${pendCount}*
+💬 Total Feedbacks: *${feedbackCount}*
+━━━━━━━━━━━━━━━━━━━━
+🎲 WINGO Status   : *${WINGO_ENABLED ? 'ACTIVE ✅' : 'DISABLED ❌'}*
+📊 QUOTEX Status  : *${QUOTEX_ENABLED ? 'ACTIVE ✅' : 'DISABLED ❌'}*
+━━━━━━━━━━━━━━━━━━━━
+⏰ UTC+3 Time     : ${getFormattedUTCTime()}`,
+        { parse_mode: 'Markdown' });
+}
+
+// ── Admin Panel Handler ─────────────────────────────────────────────────────────
+
+function handleAdminCommands(userId, text) {
+    if (text === '🎲 WINGO: ✅ ON' || text === '🎲 WINGO: ❌ OFF') {
+        toggleWingoStatus(userId);
+        return;
+    }
+    if (text === '📊 QUOTEX: ✅ ON' || text === '📊 QUOTEX: ❌ OFF') {
+        toggleQuotexStatus(userId);
+        return;
+    }
+    if (text === '💬 VIEW FEEDBACK') {
+        showAllFeedbacks(userId);
+        return;
+    }
     
-    // Check if Wingo is enabled
-    if (!WINGO_ENABLED) {
-        return bot.sendMessage(userId,
-            `🚧 *WINGO PREDICTION - COMING SOON!* 🚧\n━━━━━━━━━━━━━━━━━━━━\n📊 System is currently being updated.\n\nPlease check back later!`,
-            { parse_mode: 'Markdown', ...mainMenu(userId) }
-        );
+    switch(text) {
+        case '👥 ALL USERS': showAllUsers(userId); break;
+        case '💎 PREMIUM USERS': showPremiumUsers(userId); break;
+        case '💰 PENDING PAYMENTS': showPendingPayments(userId); break;
+        case '✅ APPROVE PAYMENT': showApprovePaymentMenu(userId); break;
+        case '❌ REMOVE PREMIUM': showRemovePremiumMenu(userId); break;
+        case '📢 BROADCAST': showBroadcastMenu(userId); break;
+        case '📊 BOT STATS': showBotStats(userId); break;
+        case '🚪 EXIT ADMIN':
+            delete adminSessions[userId];
+            userStates[userId] = null;
+            bot.sendMessage(userId, '🚪 Admin session ended.', mainMenu(userId));
+            break;
+        default:
+            bot.sendMessage(userId, '👇 Please use admin buttons.', adminMenu());
+    }
+}
+
+// ── User Feedback Commands ──────────────────────────────────────────────────────
+
+function cmdFeedback(msg) {
+    const userId = msg.from.id;
+    userStates[userId] = 'waiting_feedback_message';
+    bot.sendMessage(userId,
+`💬 *SEND FEEDBACK*
+━━━━━━━━━━━━━━━━━━━━
+We value your opinion! Please share your feedback about the bot:
+
+• What do you like?
+• What can be improved?
+• Any issues you faced?
+• Suggestions for new features?
+
+👇 *Type your feedback message below:*`,
+        { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
+}
+
+function processFeedbackMessage(userId, name, username, message) {
+    // Save feedback first
+    const feedbackId = saveFeedback(userId, name, username, message);
+    
+    // Ask for rating
+    userStates[userId] = `waiting_feedback_rating:${feedbackId}`;
+    bot.sendMessage(userId,
+`✅ *Thank you for your feedback!* (ID: #${feedbackId})
+━━━━━━━━━━━━━━━━━━━━
+📝 Your feedback has been recorded.
+
+⭐ *Would you like to rate the bot?*
+Select your rating below:`,
+        { parse_mode: 'Markdown', ...feedbackRatingKeyboard() });
+}
+
+function processFeedbackRating(userId, ratingText, feedbackId) {
+    let rating = null;
+    if (ratingText.includes('1 Star')) rating = 1;
+    else if (ratingText.includes('2 Stars')) rating = 2;
+    else if (ratingText.includes('3 Stars')) rating = 3;
+    else if (ratingText.includes('4 Stars')) rating = 4;
+    else if (ratingText.includes('5 Stars')) rating = 5;
+    
+    if (rating && feedbacks[feedbackId]) {
+        feedbacks[feedbackId].rating = rating;
+        bot.sendMessage(userId,
+`⭐ *Rating saved!* (${rating} Stars)
+━━━━━━━━━━━━━━━━━━━━
+✅ Thank you for your valuable feedback!
+
+💡 Your feedback helps us improve the bot.
+━━━━━━━━━━━━━━━━━━━━
+*Admin will review your feedback soon.*`,
+            { parse_mode: 'Markdown', ...mainMenu(userId) });
+        
+        // Notify admin about new feedback
+        ADMIN_IDS.forEach(adminId => {
+            bot.sendMessage(adminId,
+`💬 *NEW FEEDBACK RECEIVED!*
+━━━━━━━━━━━━━━━━━━━━
+📝 *ID:* #${feedbackId}
+👤 *User:* ${name} (@${username || 'N/A'})
+🆔 *ID:* \`${userId}\`
+⭐ *Rating:* ${rating} Stars
+💬 *Message:* 
+${feedbacks[feedbackId].message}
+━━━━━━━━━━━━━━━━━━━━
+Use 👑 ADMIN PANEL → 💬 VIEW FEEDBACK`,
+                { parse_mode: 'Markdown' });
+        });
+    } else {
+        bot.sendMessage(userId, `✅ Thank you for your feedback!`, { parse_mode: 'Markdown', ...mainMenu(userId) });
     }
     
     userStates[userId] = null;
+}
+
+// ── User Commands ───────────────────────────────────────────────────────────────
+
+function cmdStart(msg) {
+    const userId = msg.from.id;
+    const name = msg.from.first_name || 'Trader';
+    const uname = msg.from.username || 'N/A';
+    const isPrem = isPremium(userId);
+    
+    if (!allUsers[userId]) {
+        allUsers[userId] = { name, username: uname, joinDate: today(), wingoPredictions: 0, quotexSignals: 0 };
+    }
+    
+    userStates[userId] = null;
+    
+    bot.sendMessage(userId,
+`👋 *WELCOME TO ${BOT_NAME}, ${name}!*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 *UNIFIED TRADING BOT*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${isPrem ? '💎 *PREMIUM MEMBER* - Unlimited everything!' : `🆓 *FREE USER* - ${WINGO_FREE_LIMIT} Wingo + ${QUOTEX_FREE_LIMIT} Quotex/day`}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 *SELECT A BOT BELOW:*
+• 🎲 WINGO PREDICTION ${WINGO_ENABLED ? '✅' : '🚧'}
+• 📊 QUOTEX SIGNALS ${QUOTEX_ENABLED ? '✅' : '🚧 (Updating)'}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💬 *Have feedback?* Use the 💬 FEEDBACK button!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_Private chat only_`,
+        { parse_mode: 'Markdown', ...mainMenu(userId) });
+}
+
+function cmdWingoMenu(msg) {
+    const userId = msg.from.id;
+    if (!WINGO_ENABLED) {
+        return bot.sendMessage(userId, '🚧 *WINGO PREDICTION - COMING SOON!*\n━━━━━━━━━━━━━━━━━━━━\nSystem is currently being updated.', { parse_mode: 'Markdown', ...mainMenu(userId) });
+    }
+    userStates[userId] = null;
     userLastAction[userId] = { botType: 'wingo' };
-    bot.sendMessage(userId, `🎲 *WINGO PREDICTION MODE*\n━━━━━━━━━━━━━━━━━━━━\nSelect prediction type:`, { parse_mode: 'Markdown', ...wingoMenu() });
+    bot.sendMessage(userId, '🎲 *WINGO PREDICTION MODE*\n━━━━━━━━━━━━━━━━━━━━\nSelect prediction type:', { parse_mode: 'Markdown', ...wingoMenu() });
 }
 
 function cmdWingo30(msg) {
     const userId = msg.from.id;
-    
-    if (!WINGO_ENABLED) {
-        return bot.sendMessage(userId, `🚧 Wingo is currently disabled. Please try later.`, mainMenu(userId));
-    }
-    
+    if (!WINGO_ENABLED) return bot.sendMessage(userId, '🚧 Wingo is disabled.', mainMenu(userId));
     const access = canGetWingoSignal(userId);
-    if (!access.ok) return showWingoLimitMsg(userId);
+    if (!access.ok) return bot.sendMessage(userId, `⛔ *Daily Limit Reached!*\n\nYou've used all ${WINGO_FREE_LIMIT} free predictions.\n\n/buypremium`, { parse_mode: 'Markdown', ...mainMenu(userId) });
     userStates[userId] = 'wingo_30s_predict';
     userLastAction[userId] = { botType: 'wingo', type: '30s' };
     bot.sendMessage(userId,
@@ -504,19 +843,14 @@ function cmdWingo30(msg) {
 📌 Est. period: \`${getCurrentPeriod30s()}\`
 ━━━━━━━━━━━━━━━━━━━━
 👇 Enter period number:`,
-        { parse_mode: 'Markdown', reply_markup: { force_reply: true } }
-    );
+        { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
 }
 
 function cmdWingo1m(msg) {
     const userId = msg.from.id;
-    
-    if (!WINGO_ENABLED) {
-        return bot.sendMessage(userId, `🚧 Wingo is currently disabled. Please try later.`, mainMenu(userId));
-    }
-    
+    if (!WINGO_ENABLED) return bot.sendMessage(userId, '🚧 Wingo is disabled.', mainMenu(userId));
     const access = canGetWingoSignal(userId);
-    if (!access.ok) return showWingoLimitMsg(userId);
+    if (!access.ok) return bot.sendMessage(userId, `⛔ *Daily Limit Reached!*\n\nYou've used all ${WINGO_FREE_LIMIT} free predictions.\n\n/buypremium`, { parse_mode: 'Markdown', ...mainMenu(userId) });
     userStates[userId] = 'wingo_1m_predict';
     userLastAction[userId] = { botType: 'wingo', type: '1m' };
     bot.sendMessage(userId,
@@ -526,8 +860,7 @@ function cmdWingo1m(msg) {
 📌 Est. period: \`${getCurrentPeriod1m()}\`
 ━━━━━━━━━━━━━━━━━━━━
 👇 Enter period number:`,
-        { parse_mode: 'Markdown', reply_markup: { force_reply: true } }
-    );
+        { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
 }
 
 function handleWingoPrediction(userId, periodStr, is30s) {
@@ -538,9 +871,6 @@ function handleWingoPrediction(userId, periodStr, is30s) {
     const pred = wingoPredict(periodStr, isPrem);
     const gameMode = is30s ? '30 Sec WinGo' : '1 Min WinGo';
     const timeLeft = is30s ? getTimeLeft30s() : getTimeLeft1m();
-    
-    userLastAction[userId] = { botType: 'wingo', type: is30s ? '30s' : '1m' };
-    
     const remaining = isPrem ? '♾️ Unlimited' : `${WINGO_FREE_LIMIT - getWingoFreeUsed(userId)} left today`;
     
     bot.sendMessage(userId,
@@ -557,154 +887,19 @@ ${isPrem ? '💎 PREMIUM' : '🆓 FREE'} PREDICTION
 📏 Size: *${pred.size}*
 💡 Confidence: ${pred.conf}
 ━━━━━━━━━━━━━━━━━━━━
-${isPrem ? '_💎 Premium signal_ ' : '_⚠️ Free signal | /buypremium for better accuracy_'}
-━━━━━━━━━━━━━━━━━━━━
 📊 Remaining: ${remaining}`,
-        { parse_mode: 'Markdown', ...getNextPredictionKeyboard('wingo', is30s ? '30s' : '1m') }
-    );
+        { parse_mode: 'Markdown', ...getNextPredictionKeyboard('wingo', is30s ? '30s' : '1m') });
 }
-
-function showWingoLimitMsg(userId) {
-    bot.sendMessage(userId, `⛔ *Daily Limit Reached!*\n\nYou've used all ${WINGO_FREE_LIMIT} free predictions.\n\n/buypremium`, { parse_mode: 'Markdown', ...mainMenu(userId) });
-}
-
-// ── Quotex Commands ─────────────────────────────────────────────────────────────
 
 function cmdQuotexMenu(msg) {
     const userId = msg.from.id;
-    
-    // Check if Quotex is enabled
     if (!QUOTEX_ENABLED) {
-        return showQuotexComingSoon(userId);
+        return bot.sendMessage(userId, '🚧 *QUOTEX SIGNALS - COMING SOON!*\n━━━━━━━━━━━━━━━━━━━━\nSystem is currently being updated.\n\n🎲 Meanwhile, try WINGO PREDICTION!', { parse_mode: 'Markdown', ...mainMenu(userId) });
     }
-    
     userStates[userId] = null;
     userLastAction[userId] = { botType: 'quotex' };
-    bot.sendMessage(userId, `📊 *QUOTEX SIGNAL MODE*\n━━━━━━━━━━━━━━━━━━━━\n⏰ Chart Time (UTC+3): ${getFormattedUTCTime()}\n\nSelect signal type:`, { parse_mode: 'Markdown', ...quotexMainMenu() });
+    bot.sendMessage(userId, `📊 *QUOTEX SIGNAL MODE*\n━━━━━━━━━━━━━━━━━━━━\n⏰ Chart Time (UTC+3): ${getFormattedUTCTime()}`, { parse_mode: 'Markdown', ...mainMenu(userId) });
 }
-
-function cmdQuotexOTCSignal(msg) {
-    const userId = msg.from.id;
-    
-    if (!QUOTEX_ENABLED) {
-        return showQuotexComingSoon(userId);
-    }
-    
-    userStates[userId] = 'quotex_waiting_otc_asset';
-    bot.sendMessage(userId, `📈 *OTC ASSETS*\n━━━━━━━━━━━━━━━━━━━━\nSelect OTC pair:`, { parse_mode: 'Markdown', ...quotexAssetKeyboard('OTC') });
-}
-
-function cmdQuotexMainSignal(msg) {
-    const userId = msg.from.id;
-    
-    if (!QUOTEX_ENABLED) {
-        return showQuotexComingSoon(userId);
-    }
-    
-    userStates[userId] = 'quotex_waiting_main_asset';
-    bot.sendMessage(userId, `💱 *MAIN CURRENCIES*\n━━━━━━━━━━━━━━━━━━━━\nSelect currency pair:`, { parse_mode: 'Markdown', ...quotexAssetKeyboard('MAIN') });
-}
-
-function cmdQuotexTimeframes(msg) {
-    const userId = msg.from.id;
-    
-    if (!QUOTEX_ENABLED) {
-        return showQuotexComingSoon(userId);
-    }
-    
-    userStates[userId] = 'quotex_waiting_timeframe';
-    bot.sendMessage(userId, `⏱️ *SELECT TIMEFRAME*\n━━━━━━━━━━━━━━━━━━━━\nChoose timeframe:`, { parse_mode: 'Markdown', ...timeframeKeyboard() });
-}
-
-async function sendQuotexSignal(userId, assetKey, timeframeKey) {
-    const access = canGetQuotexSignal(userId);
-    if (!access.ok) {
-        return bot.sendMessage(userId, `⛔ *Daily Limit Reached!*\n\nYou've used all ${QUOTEX_FREE_LIMIT} free signals.\n\n/buypremium`, { parse_mode: 'Markdown', ...mainMenu(userId) });
-    }
-    
-    const isPrem = isPremium(userId);
-    if (!isPrem) incrementQuotexFree(userId);
-    if (allUsers[userId]) allUsers[userId].quotexSignals = (allUsers[userId].quotexSignals || 0) + 1;
-    
-    const signal = quotexGenerateSignal(assetKey, timeframeKey, isPrem);
-    const directionEmoji = signal.direction === 'CALL' ? '🟢 CALL (UP)' : '🔴 PUT (DOWN)';
-    const confidenceBar = '█'.repeat(Math.floor(signal.confidence / 10)) + '░'.repeat(10 - Math.floor(signal.confidence / 10));
-    
-    userLastAction[userId] = { botType: 'quotex', assetKey: assetKey, timeframe: timeframeKey };
-    
-    const remaining = isPrem ? '♾️ Unlimited' : `${QUOTEX_FREE_LIMIT - getQuotexFreeUsed(userId)} left today`;
-    
-    bot.sendMessage(userId,
-`╔══════════════════════════════════════╗
-║     📊 *${BOT_NAME} - QUOTEX* 📊
-╠══════════════════════════════════════╣
-║ 🎯 *ASSET:* ${signal.asset}
-║ 📍 *TYPE:* ${signal.assetType}
-║ ⏱️ *TIMEFRAME:* ${signal.timeframe}
-╠══════════════════════════════════════╣
-║ 🟢 *SIGNAL:* ${directionEmoji}
-║ 💪 *STRENGTH:* ${signal.strength}
-║ 📈 *CONFIDENCE:* ${signal.confidence}% ${confidenceBar}
-╠══════════════════════════════════════╣
-║ ⏰ *ENTRY (UTC+3):* ${signal.entryTime}
-║ ⌛ *EXPIRY (UTC+3):* ${signal.expiryTime}
-║ 🕐 *HOLD TIME:* ${signal.holdTime}
-╠══════════════════════════════════════╣
-║ 💵 *PRICE:* ${signal.currentPrice}
-║ 📊 *SUPPORT:* ${signal.support}
-║ 📈 *RESISTANCE:* ${signal.resistance}
-╠══════════════════════════════════════╣
-║ 📉 *RSI:* ${signal.rsi}
-║ 📊 *MACD:* ${signal.macdSignal}
-╚══════════════════════════════════════╝
-${isPrem ? '✨ *PREMIUM SIGNAL - High Accuracy* ✨' : '⚠️ *FREE SIGNAL - Upgrade for better accuracy* ⚠️'}
-━━━━━━━━━━━━━━━━━━━━
-📊 Signals remaining: ${remaining}`,
-        { parse_mode: 'Markdown', ...getNextPredictionKeyboard('quotex') }
-    );
-}
-
-// ── Next Prediction Handler ─────────────────────────────────────────────────────
-
-function handleNextPrediction(userId, text) {
-    const lastAction = userLastAction[userId];
-    if (!lastAction) return false;
-    
-    if (lastAction.botType === 'wingo') {
-        if (!WINGO_ENABLED) {
-            bot.sendMessage(userId, `🚧 Wingo is currently disabled. Please try later.`, mainMenu(userId));
-            return true;
-        }
-        if (text === '🔄 NEXT 30 SEC PREDICTION') {
-            cmdWingo30({ from: { id: userId } });
-            return true;
-        } else if (text === '🔄 NEXT 1 MIN PREDICTION') {
-            cmdWingo1m({ from: { id: userId } });
-            return true;
-        } else if (text === '🔙 BACK TO WINGO MENU') {
-            cmdWingoMenu({ from: { id: userId } });
-            return true;
-        }
-    }
-    
-    if (lastAction.botType === 'quotex') {
-        if (!QUOTEX_ENABLED) {
-            showQuotexComingSoon(userId);
-            return true;
-        }
-        if (text === '🔄 NEXT SAME SIGNAL' && lastAction.assetKey && lastAction.timeframe) {
-            sendQuotexSignal(userId, lastAction.assetKey, lastAction.timeframe);
-            return true;
-        } else if (text === '🔙 BACK TO QUOTEX MENU') {
-            cmdQuotexMenu({ from: { id: userId } });
-            return true;
-        }
-    }
-    
-    return false;
-}
-
-// ── Premium Purchase Commands ───────────────────────────────────────────────────
 
 function cmdBuyPremium(msg) {
     const userId = msg.from.id;
@@ -718,7 +913,14 @@ function cmdBuyPremium(msg) {
     for (const [key, plan] of Object.entries(PLANS)) {
         keyboard.inline_keyboard.push([{ text: `${plan.name} - PKR ${plan.price}`, callback_data: `plan_${key}` }]);
     }
-    bot.sendMessage(userId, `💎 *CHOOSE YOUR PREMIUM PLAN*\n━━━━━━━━━━━━━━━━━━━━\n✅ Unlimited Wingo predictions\n✅ Unlimited Quotex signals\n✅ Higher accuracy\n✅ Priority support`, { parse_mode: 'Markdown', reply_markup: keyboard });
+    bot.sendMessage(userId,
+`💎 *CHOOSE YOUR PREMIUM PLAN*
+━━━━━━━━━━━━━━━━━━━━
+✅ Unlimited Wingo predictions
+✅ Unlimited Quotex signals
+✅ Higher accuracy (85%+)
+✅ Priority support`,
+        { parse_mode: 'Markdown', reply_markup: keyboard });
 }
 
 bot.on('callback_query', (callbackQuery) => {
@@ -734,11 +936,6 @@ bot.on('callback_query', (callbackQuery) => {
             bot.sendMessage(userId,
 `💎 *YOU SELECTED: ${plan.name}*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Unlimited Wingo predictions
-✅ Unlimited Quotex signals
-✅ Higher accuracy (85%+)
-✅ Priority support
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💰 *PRICE: PKR ${plan.price}*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📲 *EasyPaisa:* \`${EASYPAISA_NUMBER}\`
@@ -748,11 +945,16 @@ bot.on('callback_query', (callbackQuery) => {
 *AFTER PAYING:*
 1️⃣ Type /paid
 2️⃣ Send screenshot
-3️⃣ Admin activates your ${plan.name} plan!
+3️⃣ Admin will verify
 
 Your ID: \`${userId}\``,
                 { parse_mode: 'Markdown' });
         }
+        bot.answerCallbackQuery(callbackQuery.id);
+    }
+    
+    if (data === 'admin_delete_feedback' && isAdmin(userId)) {
+        showDeleteFeedbackMenu(userId);
         bot.answerCallbackQuery(callbackQuery.id);
     }
 });
@@ -762,15 +964,22 @@ function cmdPaid(msg) {
     const name = msg.from.first_name || 'User';
     const state = userStates[userId] || '';
     let planKey = null;
-    if (state.startsWith('pending_plan:')) planKey = state.split(':')[1];
-    if (!planKey || !PLANS[planKey]) {
-        return bot.sendMessage(userId, `❌ *Please select a plan first!*\n\nUse /buypremium to choose your plan.`, { parse_mode: 'Markdown' });
+    
+    if (state.startsWith('pending_plan:')) {
+        planKey = state.split(':')[1];
     }
+    
+    if (!planKey || !PLANS[planKey]) {
+        return bot.sendMessage(userId, '❌ *Please select a plan first!*\n\nUse /buypremium to choose your plan.', { parse_mode: 'Markdown' });
+    }
+    
     pendingPayments[userId] = { name, date: today(), plan: planKey, screenshot: false };
     userStates[userId] = null;
-    bot.sendMessage(userId, `✅ *Payment notification sent for ${PLANS[planKey].name}!*\n\nSend your screenshot here.`, { parse_mode: 'Markdown' });
+    
+    bot.sendMessage(userId, `✅ *Payment notification sent for ${PLANS[planKey].name}!*\n\nSend your payment screenshot here. Admin will verify within 1-2 hours.`, { parse_mode: 'Markdown' });
+    
     ADMIN_IDS.forEach(adminId => {
-        bot.sendMessage(adminId, `💰 *NEW PAYMENT CLAIM!*\n👤 ${name}\n🆔 ${userId}\n📦 ${PLANS[planKey].name} (PKR ${PLANS[planKey].price})\n📅 ${today()}`, { parse_mode: 'Markdown' });
+        bot.sendMessage(adminId, `💰 *NEW PAYMENT CLAIM!*\n━━━━━━━━━━━━━━━━━━━━\n👤 Name: ${name}\n🆔 ID: \`${userId}\`\n📦 Plan: ${PLANS[planKey].name} (PKR ${PLANS[planKey].price})\n📅 Date: ${today()}\n━━━━━━━━━━━━━━━━━━━━\nUse 👑 ADMIN PANEL → ✅ APPROVE PAYMENT`, { parse_mode: 'Markdown' });
     });
 }
 
@@ -794,37 +1003,29 @@ ${isPrem ? `📅 *EXPIRES:* ${expiry}\n⏳ *DAYS LEFT:* ${daysLeft}` : ''}
 🎲 *WINGO PREDICTIONS:* ${u.wingoPredictions || 0}
 📊 *QUOTEX SIGNALS:* ${u.quotexSignals || 0}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-${!isPrem ? `/buypremium - Upgrade now 💎` : '✅ Premium active!'}`,
+${!isPrem ? '/buypremium - Upgrade now 💎' : '✅ Premium active!'}`,
         { parse_mode: 'Markdown', ...mainMenu(userId) });
 }
 
 function cmdHelp(msg) {
     const userId = msg.from.id;
-    const isAdminUser = isAdmin(userId);
-    
-    let adminInfo = '';
-    if (isAdminUser) {
-        adminInfo = `\n👑 *ADMIN INFO:* Use "👑 ADMIN PANEL" button in main menu\n`;
-    }
-    
-    let wingoStatus = WINGO_ENABLED ? '✅ ACTIVE' : '🚧 COMING SOON';
-    let quotexStatus = QUOTEX_ENABLED ? '✅ ACTIVE' : '🚧 COMING SOON (Updating)';
-    
     bot.sendMessage(userId,
 `❓ *HELP GUIDE*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*🎲 WINGO PREDICTION:* ${wingoStatus}
-• 30 SEC - Fast predictions
-• 1 MIN - Standard predictions
-• Enter period number from game
+*🎲 WINGO PREDICTION:* ${WINGO_ENABLED ? '✅ ACTIVE' : '🚧 COMING SOON'}
+• Enter period number from WinGo game
+• Get number, color, size prediction
 
-*📊 QUOTEX SIGNALS:* ${quotexStatus}
-• OTC SIGNAL - Digital options
-• MAIN SIGNAL - Currency pairs
-• Select timeframe (1m to 1h)
+*📊 QUOTEX SIGNALS:* ${QUOTEX_ENABLED ? '✅ ACTIVE' : '🚧 COMING SOON'}
+• OTC & Main currency pairs
+• Multiple timeframes (1m to 1h)
+
+*💬 FEEDBACK:*
+• Use 💬 FEEDBACK button
+• Share your experience
+• Help us improve the bot
 
 *👑 ADMIN CONTACT:* @GojoVipAdmin
-${adminInfo}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🆓 FREE: Wingo(${WINGO_FREE_LIMIT}) + Quotex(${QUOTEX_FREE_LIMIT})/day
 💎 PREMIUM: Unlimited + Higher accuracy
@@ -832,7 +1033,7 @@ ${adminInfo}
         { parse_mode: 'Markdown', ...mainMenu(userId) });
 }
 
-// ── Message Handler ─────────────────────────────────────────────────────────────
+// ── Main Message Handler ────────────────────────────────────────────────────────
 
 function handleMessage(msg) {
     const userId = msg.from.id;
@@ -851,12 +1052,37 @@ function handleMessage(msg) {
         if (text === ADMIN_PASSWORD) {
             adminSessions[userId] = { verified: true, expiry: Date.now() + 3600000 };
             userStates[userId] = 'admin_panel';
-            bot.sendMessage(userId, '✅ *Password Correct!*\n\n🔐 Admin session active for *1 hour*', { parse_mode: 'Markdown' });
+            bot.sendMessage(userId, '✅ *Password Correct!*\n\n🔐 Admin session active for 1 hour.', { parse_mode: 'Markdown' });
             showAdminBanner(userId);
+            bot.sendMessage(userId, 'Admin Panel:', adminMenu());
         } else {
             userStates[userId] = null;
-            bot.sendMessage(userId, '❌ *Wrong password!*\n\nAccess denied.', { parse_mode: 'Markdown', ...mainMenu(userId) });
+            bot.sendMessage(userId, '❌ *Wrong password!*', { parse_mode: 'Markdown', ...mainMenu(userId) });
         }
+        return;
+    }
+    
+    // Admin approval handler
+    if (state === 'waiting_approve_id' && isAdmin(userId)) {
+        doApprovePayment(userId, text);
+        return;
+    }
+    
+    // Admin remove handler
+    if (state === 'waiting_remove_id' && isAdmin(userId)) {
+        doRemovePremium(userId, text);
+        return;
+    }
+    
+    // Admin broadcast handler
+    if (state === 'waiting_broadcast' && isAdmin(userId)) {
+        doBroadcast(userId, text);
+        return;
+    }
+    
+    // Admin delete feedback handler
+    if (state === 'waiting_delete_feedback' && isAdmin(userId)) {
+        doDeleteFeedback(userId, text);
         return;
     }
     
@@ -866,303 +1092,84 @@ function handleMessage(msg) {
         return;
     }
     
-    // Check for Next Prediction buttons first
-    if (handleNextPrediction(userId, text)) {
+    // Feedback message handler
+    if (state === 'waiting_feedback_message') {
+        if (text.length > 500) {
+            bot.sendMessage(userId, '❌ Feedback is too long! Please keep it under 500 characters.', mainMenu(userId));
+            userStates[userId] = null;
+            return;
+        }
+        processFeedbackMessage(userId, name, uname, text);
+        return;
+    }
+    
+    // Feedback rating handler
+    if (state && state.startsWith('waiting_feedback_rating:')) {
+        const feedbackId = parseInt(state.split(':')[1]);
+        if (text.includes('Star') || text.includes('BACK')) {
+            if (text === '🔙 MAIN MENU') {
+                userStates[userId] = null;
+                bot.sendMessage(userId, 'Main Menu:', mainMenu(userId));
+                return;
+            }
+            processFeedbackRating(userId, text, feedbackId);
+        } else {
+            userStates[userId] = null;
+            bot.sendMessage(userId, 'Main Menu:', mainMenu(userId));
+        }
+        return;
+    }
+    
+    // Next prediction handler
+    if (text === '🔄 NEXT 30 SEC PREDICTION') {
+        cmdWingo30({ from: { id: userId } });
+        return;
+    }
+    if (text === '🔄 NEXT 1 MIN PREDICTION') {
+        cmdWingo1m({ from: { id: userId } });
+        return;
+    }
+    if (text === '🔙 BACK TO WINGO MENU') {
+        cmdWingoMenu({ from: { id: userId } });
         return;
     }
     
     // Main menu navigation
-    if (text === '🏠 MAIN MENU') {
+    if (text === '🏠 MAIN MENU' || text === '🔙 MAIN MENU') {
         userStates[userId] = null;
         bot.sendMessage(userId, 'Main Menu:', mainMenu(userId));
         return;
     }
     
-    // Admin Panel Button Handler
-    if (text === '👑 ADMIN PANEL') {
-        cmdAdminLogin(msg);
-        return;
-    }
-    
     // Wingo prediction handlers
     if (state === 'wingo_30s_predict' && /^\d{8,14}$/.test(text)) {
-        if (!WINGO_ENABLED) {
-            bot.sendMessage(userId, `🚧 Wingo is currently disabled. Please try later.`, mainMenu(userId));
-            userStates[userId] = null;
-            return;
-        }
         handleWingoPrediction(userId, text, true);
         userStates[userId] = null;
         return;
     }
     if (state === 'wingo_1m_predict' && /^\d{8,14}$/.test(text)) {
-        if (!WINGO_ENABLED) {
-            bot.sendMessage(userId, `🚧 Wingo is currently disabled. Please try later.`, mainMenu(userId));
-            userStates[userId] = null;
-            return;
-        }
         handleWingoPrediction(userId, text, false);
         userStates[userId] = null;
-        return;
-    }
-    
-    // Quotex asset selection handlers (only if enabled)
-    if (state === 'quotex_waiting_otc_asset') {
-        if (!QUOTEX_ENABLED) {
-            showQuotexComingSoon(userId);
-            userStates[userId] = null;
-            return;
-        }
-        const assetMap = { 'EUR/USD (OTC)': 'otc_eurusd', 'GBP/USD (OTC)': 'otc_gbpusd', 'USD/JPY (OTC)': 'otc_usdjpy', 'AUD/USD (OTC)': 'otc_audusd', 'BTC/USD (OTC)': 'otc_btcusd' };
-        if (text === '🔙 BACK') {
-            userStates[userId] = null;
-            bot.sendMessage(userId, 'Quotex Menu:', quotexMainMenu());
-        } else if (assetMap[text]) {
-            userStates[userId] = `quotex_signal_${assetMap[text]}`;
-            bot.sendMessage(userId, `⏱️ Select timeframe for ${text}:`, timeframeKeyboard());
-        }
-        return;
-    }
-    
-    if (state === 'quotex_waiting_main_asset') {
-        if (!QUOTEX_ENABLED) {
-            showQuotexComingSoon(userId);
-            userStates[userId] = null;
-            return;
-        }
-        const assetMap = { 'EUR/USD': 'main_eurusd', 'GBP/USD': 'main_gbpusd', 'USD/JPY': 'main_usdjpy', 'AUD/USD': 'main_audusd', 'BTC/USD': 'main_btcusd' };
-        if (text === '🔙 BACK') {
-            userStates[userId] = null;
-            bot.sendMessage(userId, 'Quotex Menu:', quotexMainMenu());
-        } else if (assetMap[text]) {
-            userStates[userId] = `quotex_signal_${assetMap[text]}`;
-            bot.sendMessage(userId, `⏱️ Select timeframe for ${text}:`, timeframeKeyboard());
-        }
-        return;
-    }
-    
-    // Quotex timeframe handler
-    if (state.startsWith('quotex_signal_') && ['1 MINUTE', '5 MINUTES', '15 MINUTES', '30 MINUTES', '1 HOUR', '🔙 BACK TO QUOTEX'].includes(text)) {
-        if (!QUOTEX_ENABLED) {
-            showQuotexComingSoon(userId);
-            userStates[userId] = null;
-            return;
-        }
-        if (text === '🔙 BACK TO QUOTEX') {
-            userStates[userId] = null;
-            bot.sendMessage(userId, 'Quotex Menu:', quotexMainMenu());
-            return;
-        }
-        const timeframeMap = { '1 MINUTE': '1m', '5 MINUTES': '5m', '15 MINUTES': '15m', '30 MINUTES': '30m', '1 HOUR': '1h' };
-        const timeframe = timeframeMap[text];
-        const assetKey = state.replace('quotex_signal_', '');
-        sendQuotexSignal(userId, assetKey, timeframe);
-        userStates[userId] = null;
-        return;
-    }
-    
-    if (state === 'quotex_waiting_timeframe') {
-        if (!QUOTEX_ENABLED) {
-            showQuotexComingSoon(userId);
-            userStates[userId] = null;
-            return;
-        }
-        if (text === '🔙 BACK TO QUOTEX') {
-            userStates[userId] = null;
-            bot.sendMessage(userId, 'Quotex Menu:', quotexMainMenu());
-        } else {
-            userStates[userId] = null;
-            bot.sendMessage(userId, 'Please select OTC or MAIN SIGNAL first.', quotexMainMenu());
-        }
         return;
     }
     
     // Main menu commands
     switch(text) {
         case '/start': cmdStart(msg); break;
-        case '/admin': cmdAdminLogin(msg); break;
         case '🎲 WINGO PREDICTION': cmdWingoMenu(msg); break;
         case '📊 QUOTEX SIGNALS': cmdQuotexMenu(msg); break;
         case '🎯 30 SEC PREDICT': cmdWingo30(msg); break;
         case '🎯 1 MIN PREDICT': cmdWingo1m(msg); break;
-        case '📈 OTC SIGNAL': cmdQuotexOTCSignal(msg); break;
-        case '💱 MAIN SIGNAL': cmdQuotexMainSignal(msg); break;
-        case '⏱️ TIMEFRAMES': cmdQuotexTimeframes(msg); break;
         case '💎 BUY PREMIUM': cmdBuyPremium(msg); break;
         case '📊 MY ACCOUNT': cmdMyAccount(msg); break;
         case '❓ HELP': cmdHelp(msg); break;
-        case '🔙 MAIN MENU':
-        case '🔙 BACK':
-            userStates[userId] = null;
-            bot.sendMessage(userId, 'Main Menu:', mainMenu(userId));
-            break;
+        case '💬 FEEDBACK': cmdFeedback(msg); break;
+        case '👑 ADMIN PANEL': cmdAdminLogin(msg); break;
         case '/paid': cmdPaid(msg); break;
         default:
-            if (!text.startsWith('/')) bot.sendMessage(userId, 'Use the buttons below 👇', mainMenu(userId));
-    }
-}
-
-function cmdStart(msg) {
-    const userId = msg.from.id;
-    const name = msg.from.first_name || 'Trader';
-    const isPrem = isPremium(userId);
-    const isAdminUser = isAdmin(userId);
-    
-    userStates[userId] = null;
-    
-    let adminWelcome = '';
-    if (isAdminUser) {
-        adminWelcome = '\n👑 *Admin Mode:* Use "👑 ADMIN PANEL" button below\n';
-    }
-    
-    bot.sendMessage(userId,
-`👋 *WELCOME TO ${BOT_NAME}, ${name}!*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🤖 *UNIFIED TRADING BOT*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-${isPrem ? '💎 *PREMIUM MEMBER* - Unlimited everything!' : `🆓 *FREE USER* - ${WINGO_FREE_LIMIT} Wingo + ${QUOTEX_FREE_LIMIT} Quotex/day`}
-${adminWelcome}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📌 *SELECT A BOT BELOW:*
-• 🎲 WINGO PREDICTION ${WINGO_ENABLED ? '✅' : '🚧'}
-• 📊 QUOTEX SIGNALS ${QUOTEX_ENABLED ? '✅' : '🚧 (Updating)'}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_Private chat only_`,
-        { parse_mode: 'Markdown', ...mainMenu(userId) });
-}
-
-// ── Admin Commands Handler (with Toggle Buttons) ─────────────────────────────────
-
-function handleAdminCommands(userId, text) {
-    // Handle Toggle buttons
-    if (text === '🎲 WINGO: ✅ ON' || text === '🎲 WINGO: ❌ OFF') {
-        toggleWingoStatus(userId);
-        return;
-    }
-    
-    if (text === '📊 QUOTEX: ✅ ON' || text === '📊 QUOTEX: ❌ OFF') {
-        toggleQuotexStatus(userId);
-        return;
-    }
-    
-    switch(text) {
-        case '👥 ALL USERS':
-            const users = Object.entries(allUsers);
-            if (users.length === 0) return bot.sendMessage(userId, '📭 No users yet.');
-            let out = `👥 *ALL USERS* (${users.length})\n━━━━━━━━━━━━━━━━━━━━\n`;
-            users.slice(0, 30).forEach(([id, u]) => {
-                const plan = isPremium(Number(id)) ? '💎' : '🆓';
-                out += `${plan} *${u.name}* (@${u.username})\n🆔 \`${id}\`\n📊 Wingo:${u.wingoPredictions || 0} Quotex:${u.quotexSignals || 0}\n\n`;
-            });
-            if (users.length > 30) out += `_... and ${users.length - 30} more_`;
-            bot.sendMessage(userId, out, { parse_mode: 'Markdown' });
-            break;
-            
-        case '💎 PREMIUM USERS':
-            const prems = Object.entries(premiumUsers);
-            if (prems.length === 0) return bot.sendMessage(userId, '📭 No premium users.');
-            let premOut = `💎 *PREMIUM USERS* (${prems.length})\n━━━━━━━━━━━━━━━━━━━━\n`;
-            prems.forEach(([id, exp]) => {
-                const u = allUsers[id] || { name: 'Unknown' };
-                const daysLeft = Math.ceil((exp - Date.now()) / 86400000);
-                premOut += `💎 *${u.name}*\n🆔 \`${id}\`\n⏳ ${daysLeft} days left\n\n`;
-            });
-            bot.sendMessage(userId, premOut, { parse_mode: 'Markdown' });
-            break;
-            
-        case '💰 PENDING PAYMENTS':
-            const pendings = Object.entries(pendingPayments);
-            if (pendings.length === 0) return bot.sendMessage(userId, '✅ No pending payments!');
-            let pendOut = `💰 *PENDING PAYMENTS* (${pendings.length})\n━━━━━━━━━━━━━━━━━━━━\n`;
-            pendings.forEach(([id, p]) => {
-                const planInfo = PLANS[p.plan] || { name: p.plan };
-                pendOut += `👤 *${p.name}* (${planInfo.name})\n🆔 \`${id}\`\n📅 ${p.date}\n\n`;
-            });
-            bot.sendMessage(userId, pendOut, { parse_mode: 'Markdown' });
-            break;
-            
-        case '✅ APPROVE PAYMENT':
-            userStates[userId] = 'waiting_approve_id';
-            bot.sendMessage(userId, '✅ *Approve Payment*\n━━━━━━━━━━━━━━━━━━━━\nEnter user ID to approve:', { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
-            break;
-            
-        case '❌ REMOVE PREMIUM':
-            userStates[userId] = 'waiting_remove_id';
-            bot.sendMessage(userId, '❌ *Remove Premium*\n━━━━━━━━━━━━━━━━━━━━\nEnter user ID to remove premium:', { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
-            break;
-            
-        case '📢 BROADCAST':
-            userStates[userId] = 'waiting_broadcast';
-            bot.sendMessage(userId, '📢 *Broadcast Message*\n━━━━━━━━━━━━━━━━━━━━\nEnter your broadcast message:', { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
-            break;
-            
-        case '📊 BOT STATS':
-            const premCount = Object.keys(premiumUsers).length;
-            const userCount = Object.keys(allUsers).length;
-            const pendCount = Object.keys(pendingPayments).length;
-            bot.sendMessage(userId,
-`📊 *BOT STATISTICS*
-━━━━━━━━━━━━━━━━━━━━
-👥 Total Users    : *${userCount}*
-💎 Premium Users  : *${premCount}*
-🆓 Free Users     : *${userCount - premCount}*
-💰 Pending Pay    : *${pendCount}*
-━━━━━━━━━━━━━━━━━━━━
-🎲 WINGO Status   : *${WINGO_ENABLED ? 'ACTIVE ✅' : 'DISABLED ❌'}*
-📊 QUOTEX Status  : *${QUOTEX_ENABLED ? 'ACTIVE ✅' : 'DISABLED ❌'}*
-━━━━━━━━━━━━━━━━━━━━
-⏰ UTC+3 Time     : ${getFormattedUTCTime()}`,
-                { parse_mode: 'Markdown' });
-            break;
-            
-        case '🚪 EXIT ADMIN':
-            delete adminSessions[userId];
-            userStates[userId] = null;
-            bot.sendMessage(userId, '🚪 *Admin session ended.*\nYou are now in user mode.', { parse_mode: 'Markdown', ...mainMenu(userId) });
-            break;
-            
-        default:
-            bot.sendMessage(userId, '👇 Please use the admin buttons below.', adminMenu());
-    }
-    
-    // Handle numeric input for approval
-    if (userStates[userId] === 'waiting_approve_id' && /^\d+$/.test(text)) {
-        const targetId = parseInt(text);
-        const pending = pendingPayments[targetId];
-        if (pending) {
-            const plan = PLANS[pending.plan];
-            if (plan) premiumUsers[targetId] = Date.now() + plan.days * 86400000;
-            else premiumUsers[targetId] = Date.now() + 30 * 86400000;
-            delete pendingPayments[targetId];
-            const expiry = new Date(premiumUsers[targetId]).toLocaleDateString();
-            bot.sendMessage(userId, `✅ *Premium Activated!*\n🆔 User: \`${targetId}\`\n📅 Expires: ${expiry}`, { parse_mode: 'Markdown', ...adminMenu() });
-            bot.sendMessage(targetId, `🎉 *PREMIUM ACTIVATED!*\n\nYour plan has been activated!\nExpires: *${expiry}*\n\nEnjoy unlimited Wingo predictions & Quotex signals! 🚀`, { parse_mode: 'Markdown' });
-        } else {
-            bot.sendMessage(userId, `❌ No pending payment for ID ${targetId}`, adminMenu());
-        }
-        userStates[userId] = 'admin_panel';
-    }
-    
-    if (userStates[userId] === 'waiting_remove_id' && /^\d+$/.test(text)) {
-        const targetId = parseInt(text);
-        if (premiumUsers[targetId]) {
-            delete premiumUsers[targetId];
-            bot.sendMessage(userId, `✅ Premium removed for \`${targetId}\``, { parse_mode: 'Markdown', ...adminMenu() });
-            bot.sendMessage(targetId, `⚠️ Your premium has been removed.\n\nContact admin if this was a mistake.`);
-        } else {
-            bot.sendMessage(userId, `❌ ID ${targetId} is not a premium user`, adminMenu());
-        }
-        userStates[userId] = 'admin_panel';
-    }
-    
-    if (userStates[userId] === 'waiting_broadcast' && text && !text.startsWith('/')) {
-        const userIds = Object.keys(allUsers);
-        let sent = 0;
-        userIds.forEach(uid => {
-            bot.sendMessage(Number(uid), `📢 *ADMIN BROADCAST*\n━━━━━━━━━━━━━━━━━━━━\n${text}`, { parse_mode: 'Markdown' }).then(() => sent++).catch(() => {});
-        });
-        bot.sendMessage(userId, `✅ Broadcast sent to *${sent}* users.`, { parse_mode: 'Markdown', ...adminMenu() });
-        userStates[userId] = 'admin_panel';
+            if (!text.startsWith('/')) {
+                bot.sendMessage(userId, 'Use the buttons below 👇', mainMenu(userId));
+            }
     }
 }
 
@@ -1172,13 +1179,15 @@ bot.on('photo', (msg) => {
     if (msg.chat.type !== 'private') return;
     const userId = msg.from.id;
     const name = msg.from.first_name || 'User';
+    
     if (pendingPayments[userId]) {
         pendingPayments[userId].screenshot = true;
-        bot.sendMessage(userId, '✅ *Screenshot received!*\nAdmin will verify within 1-2 hours. Thank you! 🙏', { parse_mode: 'Markdown' });
+        bot.sendMessage(userId, '✅ *Screenshot received!* Admin will verify within 1-2 hours. Thank you! 🙏', { parse_mode: 'Markdown' });
+        
         ADMIN_IDS.forEach(adminId => {
             bot.forwardMessage(adminId, msg.chat.id, msg.message_id);
             const planName = pendingPayments[userId].plan ? (PLANS[pendingPayments[userId].plan]?.name || 'Unknown') : 'Unknown';
-            bot.sendMessage(adminId, `📸 *Screenshot from* ${name} \`${userId}\` (${planName})\n\nApprove in admin panel → 👑 ADMIN PANEL button`, { parse_mode: 'Markdown' });
+            bot.sendMessage(adminId, `📸 *Screenshot from* ${name} \`${userId}\` (${planName})\n\nUse 👑 ADMIN PANEL → ✅ APPROVE PAYMENT`, { parse_mode: 'Markdown' });
         });
     }
 });
@@ -1187,19 +1196,15 @@ bot.on('photo', (msg) => {
 
 bot.on('message', (msg) => {
     if (msg.chat.type !== 'private') {
-        bot.sendMessage(msg.chat.id, '❌ This bot only works in private chat!\nOpen bot directly: @YourBotUsername');
+        bot.sendMessage(msg.chat.id, '❌ This bot only works in private chat!');
         return;
     }
     handleMessage(msg);
 });
 
-console.log('🚀 UNIFIED TRADING BOT v2.2 (With ON/OFF Toggle System) is running!');
-console.log(`📦 Features: Wingo Prediction + Quotex Signals + Next Prediction + Admin Button + ON/OFF Toggle`);
+console.log('🚀 UNIFIED TRADING BOT v2.4 (WITH FEEDBACK SYSTEM) is running!');
 console.log(`👑 Admin IDs: ${ADMIN_IDS.join(', ')}`);
 console.log(`💰 Plans: ${Object.keys(PLANS).join(', ')}`);
-console.log(`🔐 Admin Password protected`);
-console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-console.log(`🎲 WINGO BOT STATUS: ${WINGO_ENABLED ? 'ENABLED ✅' : 'DISABLED ❌'}`);
-console.log(`📊 QUOTEX BOT STATUS: ${QUOTEX_ENABLED ? 'ENABLED ✅' : 'DISABLED ❌'}`);
-console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-console.log(`💡 To change status: Login to Admin Panel -> Click WINGO or QUOTEX button`);
+console.log(`🎲 WINGO: ${WINGO_ENABLED ? 'ENABLED' : 'DISABLED'}`);
+console.log(`📊 QUOTEX: ${QUOTEX_ENABLED ? 'ENABLED' : 'DISABLED'}`);
+console.log(`💬 Feedback system: ACTIVE`);
