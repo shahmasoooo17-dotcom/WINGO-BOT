@@ -1,9 +1,8 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// WINGO PRIVATE PREDICTION BOT v2.0
-// - Private chat only
-// - Password protected Admin Panel
-// - Payment management
-// - User management
+// WINGO PRIVATE PREDICTION BOT v2.1
+// - Multiple premium plans (2d, 1w, 2w, 1m)
+// - Admin panel with plan approval
+// - Help includes admin contact @GojoVipAdmin
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 const TelegramBot = require('node-telegram-bot-api');
@@ -16,23 +15,29 @@ const BOT_TOKEN  = '8425112915:AAE_RNh0tDnXRp3ULKciTPuqIjuiSoNfQtE';
 const ADMIN_IDS  = [7592032793];        // Your Telegram numeric ID
 
 // 🔐 Admin Panel Password
-const ADMIN_PASSWORD = 'Masoodking123'; // Change this to your own password
+const ADMIN_PASSWORD = 'Masoodking123';
 
 // Payment Details
 const EASYPAISA_NUMBER = '0318-0939237';
 const JAZZCASH_NUMBER  = '0319-9837973';
 const ACCOUNT_NAME     = 'MUHAMMAD ABID SHAH';
 
-// Premium Settings
-const PREMIUM_PRICE_PKR = 3000;
-const PREMIUM_DAYS      = 200;
-const FREE_DAILY_LIMIT  = 5;
+// 🆕 MULTIPLE PREMIUM PLANS (edit prices below)
+const PLANS = {
+  '2days':  { days: 2,  price: 500,  name: '2 Days Subscription' },
+  '1week':  { days: 7,  price: 1000, name: '1 Week Subscription' },
+  '2weeks': { days: 14, price: 1800, name: '2 Weeks Subscription' },
+  '1month': { days: 30, price: 3000, name: '1 Month Premium Subscription' }
+};
+
+// Free daily limit
+const FREE_DAILY_LIMIT = 8;
 
 // Bot Name
 const BOT_NAME = '🎯 MASOOD KING BOT';
 
 // ════════════════════════════════
-// DO NOT CHANGE BELOW
+// DO NOT CHANGE BELOW (unless you know what you're doing)
 // ════════════════════════════════
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
@@ -41,7 +46,7 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const premiumUsers    = {};  // { userId: expiryTimestamp }
 const freeUsage       = {};  // { userId: { date, count } }
 const userStates      = {};  // { userId: state_string }
-const pendingPayments = {};  // { userId: { name, date, screenshot } }
+const pendingPayments = {};  // { userId: { name, date, plan, screenshot } }
 const allUsers        = {};  // { userId: { name, username, joinDate } }
 const adminSessions   = {};  // { adminId: { verified: bool, expiry: timestamp } }
 
@@ -335,13 +340,14 @@ function handleAdminPanel(msg, text) {
       return bot.sendMessage(userId, out, { parse_mode: 'Markdown' });
     }
 
-    // ── Pending Payments ──
+    // ── Pending Payments (with plan details) ──
     case /💰 Pending Payments/.test(text): {
       const entries = Object.entries(pendingPayments);
       if (entries.length === 0) return bot.sendMessage(userId, '✅ No pending payments!');
       let out = `💰 *Pending Payments (${entries.length})*\n━━━━━━━━━━━━━━━━━━━━\n`;
       entries.forEach(([id, p]) => {
-        out += `👤 *${p.name}*\n🆔 \`${id}\` | 📅 ${p.date}\nStatus: ⏳ Waiting\n\n`;
+        const planInfo = PLANS[p.plan] || { name: p.plan, price: '?' };
+        out += `👤 *${p.name}* (${planInfo.name} - PKR ${planInfo.price})\n🆔 \`${id}\` | 📅 ${p.date}\nStatus: ⏳ Waiting\n\n`;
       });
       out += `\nTo approve: tap ✅ Approve Payment`;
       return bot.sendMessage(userId, out, { parse_mode: 'Markdown' });
@@ -353,7 +359,10 @@ function handleAdminPanel(msg, text) {
       if (entries.length === 0) return bot.sendMessage(userId, '✅ No pending payments to approve!');
       userStates[userId] = 'waiting_approve_id';
       let out = `✅ *Approve Payment*\n━━━━━━━━━━━━━━━━━━━━\nPending users:\n\n`;
-      entries.forEach(([id, p]) => { out += `🆔 \`${id}\` — ${p.name}\n`; });
+      entries.forEach(([id, p]) => {
+        const planInfo = PLANS[p.plan] || { name: p.plan };
+        out += `🆔 \`${id}\` — ${p.name} (${planInfo.name})\n`;
+      });
       out += `\n👇 *Enter User ID to approve:*`;
       return bot.sendMessage(userId, out, { parse_mode: 'Markdown', reply_markup: { force_reply: true } });
     }
@@ -407,24 +416,38 @@ function handleAdminPanel(msg, text) {
   }
 }
 
-// ── Approve payment action ──
+// ── Approve payment action (uses stored plan) ──
 function doApprovePayment(adminId, text) {
   const targetId = parseInt(text.trim());
   if (isNaN(targetId)) {
     userStates[adminId] = 'admin_panel';
     return bot.sendMessage(adminId, '❌ Invalid ID. Please enter numbers only.', adminMenu());
   }
-  premiumUsers[targetId] = Date.now() + PREMIUM_DAYS * 86400000;
+  const pending = pendingPayments[targetId];
+  if (!pending) {
+    userStates[adminId] = 'admin_panel';
+    return bot.sendMessage(adminId, `❌ No pending payment found for ID ${targetId}.`, adminMenu());
+  }
+
+  const planKey = pending.plan;
+  const plan = PLANS[planKey];
+  if (!plan) {
+    // fallback to old default (but shouldn't happen)
+    premiumUsers[targetId] = Date.now() + 200 * 86400000;
+  } else {
+    premiumUsers[targetId] = Date.now() + plan.days * 86400000;
+  }
+
   delete pendingPayments[targetId];
   userStates[adminId] = 'admin_panel';
   const expiry = new Date(premiumUsers[targetId]).toLocaleDateString();
 
   bot.sendMessage(adminId,
-    `✅ *Premium Activated!*\n🆔 User: \`${targetId}\`\n📅 Expires: ${expiry}`,
+    `✅ *Premium Activated!*\n🆔 User: \`${targetId}\`\n📅 Expires: ${expiry}\n📦 Plan: ${plan.name}`,
     { parse_mode: 'Markdown', ...adminMenu() }
   );
   bot.sendMessage(targetId,
-    `🎉 *Premium Activated!*\n\n💎 Your payment has been verified!\nDuration: *${PREMIUM_DAYS} days*\nExpires: *${expiry}*\n\n✅ You now have unlimited predictions!\nThank you! 🙏`,
+    `🎉 *Premium Activated!*\n\n💎 Your payment has been verified!\nPlan: *${plan.name}*\nExpires: *${expiry}*\n\n✅ You now have unlimited predictions!\nThank you! 🙏`,
     { parse_mode: 'Markdown', ...mainMenu(targetId) }
   ).catch(() => {});
 }
@@ -494,6 +517,7 @@ _Private chat only — no groups/channels_`,
   );
 }
 
+// UPDATED HELP WITH ADMIN CONTACT
 function cmdHelp(msg) {
   const userId = msg.from.id;
   bot.sendMessage(userId,
@@ -512,6 +536,8 @@ function cmdHelp(msg) {
 /buypremium — Upgrade plan
 /myaccount — Your account info
 /paid — After you pay premium
+
+👑 *Contact Admin:* @GojoVipAdmin
 ━━━━━━━━━━━━━━━━━━━━
 🆓 Free: ${FREE_DAILY_LIMIT} predictions/day
 💎 Premium: Unlimited + Higher accuracy`,
@@ -628,6 +654,7 @@ ${prem ? '✅ Unlimited predictions active!' : '/buypremium — Upgrade now 💎
   );
 }
 
+// Multi-plan purchase
 function cmdBuyPremium(msg) {
   const userId = msg.from.id;
   if (isPremium(userId)) {
@@ -638,14 +665,37 @@ function cmdBuyPremium(msg) {
       { parse_mode: 'Markdown', ...mainMenu(userId) }
     );
   }
+
+  const keyboard = {
+    inline_keyboard: []
+  };
+  for (const [key, plan] of Object.entries(PLANS)) {
+    keyboard.inline_keyboard.push([
+      { text: `${plan.name} - PKR ${plan.price}`, callback_data: `plan_${key}` }
+    ]);
+  }
   bot.sendMessage(userId,
-`💎 *Buy Premium — ${PREMIUM_DAYS} Days*
+    `💎 *Choose your Premium Plan*\n━━━━━━━━━━━━━━━━━━━━\nSelect the plan that suits you best:`,
+    { parse_mode: 'Markdown', reply_markup: keyboard }
+  );
+}
+
+bot.on('callback_query', (callbackQuery) => {
+  const userId = callbackQuery.from.id;
+  const data = callbackQuery.data;
+  if (data && data.startsWith('plan_')) {
+    const planKey = data.replace('plan_', '');
+    const plan = PLANS[planKey];
+    if (plan) {
+      userStates[userId] = `pending_plan:${planKey}`;
+      bot.sendMessage(userId,
+`💎 *You selected: ${plan.name}*
 ━━━━━━━━━━━━━━━━━━━━
 ✅ Unlimited predictions daily
 ✅ Higher accuracy signals (85%+)
 ✅ Priority support
 ━━━━━━━━━━━━━━━━━━━━
-💰 *Price: PKR ${PREMIUM_PRICE_PKR}*
+💰 *Price: PKR ${plan.price}*
 ━━━━━━━━━━━━━━━━━━━━
 📲 *EasyPaisa:*
 Number: \`${EASYPAISA_NUMBER}\`
@@ -655,32 +705,51 @@ Name: ${ACCOUNT_NAME}
 Number: \`${JAZZCASH_NUMBER}\`
 Name: ${ACCOUNT_NAME}
 
-Amount: PKR *${PREMIUM_PRICE_PKR}*
+Amount: PKR *${plan.price}*
 ━━━━━━━━━━━━━━━━━━━━
 *After paying:*
 1️⃣ Type /paid
 2️⃣ Send payment screenshot
-3️⃣ Admin verifies & activates!
+3️⃣ Admin will verify & activate your *${plan.name}* plan!
 
 Your ID (share with admin if needed):
 \`${userId}\``,
-    { parse_mode: 'Markdown' }
-  );
-}
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      bot.sendMessage(userId, '❌ Invalid plan. Please try again with /buypremium');
+    }
+    bot.answerCallbackQuery(callbackQuery.id);
+  }
+});
 
 function cmdPaid(msg) {
   const userId = msg.from.id;
   const name   = msg.from.first_name || 'User';
-  pendingPayments[userId] = { name, date: today(), screenshot: false };
+  
+  const state = userStates[userId] || '';
+  let planKey = null;
+  if (state.startsWith('pending_plan:')) {
+    planKey = state.split(':')[1];
+  }
+  if (!planKey || !PLANS[planKey]) {
+    return bot.sendMessage(userId,
+      `❌ *Please select a plan first!*\n\nUse /buypremium to choose your plan.`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  pendingPayments[userId] = { name, date: today(), plan: planKey, screenshot: false };
+  userStates[userId] = null;
 
   bot.sendMessage(userId,
-    `✅ *Payment notification sent!*\n\nNow please send your *payment screenshot* here.\nAdmin will verify within *1-2 hours* ⏳`,
+    `✅ *Payment notification sent for ${PLANS[planKey].name}!*\n\nNow please send your *payment screenshot* here.\nAdmin will verify within *1-2 hours* ⏳`,
     { parse_mode: 'Markdown' }
   );
 
   ADMIN_IDS.forEach(adminId => {
     bot.sendMessage(adminId,
-      `💰 *New Payment Claim!*\n━━━━━━━━━━━━━━━━━━━━\n👤 Name: ${name}\n🆔 ID: \`${userId}\`\n📅 Date: ${today()}\n━━━━━━━━━━━━━━━━━━━━\nOpen admin panel: /admin`,
+      `💰 *New Payment Claim!*\n━━━━━━━━━━━━━━━━━━━━\n👤 Name: ${name}\n🆔 ID: \`${userId}\`\n📦 Plan: ${PLANS[planKey].name} (PKR ${PLANS[planKey].price})\n📅 Date: ${today()}\n━━━━━━━━━━━━━━━━━━━━\nOpen admin panel: /admin`,
       { parse_mode: 'Markdown' }
     );
   });
@@ -696,14 +765,17 @@ bot.on('photo', (msg) => {
     bot.sendMessage(userId, '📸 Screenshot received! Admin will verify soon. Thank you! 🙏');
     ADMIN_IDS.forEach(adminId => {
       bot.forwardMessage(adminId, msg.chat.id, msg.message_id);
+      const planName = pendingPayments[userId].plan ? (PLANS[pendingPayments[userId].plan]?.name || 'Unknown') : 'Unknown';
       bot.sendMessage(adminId,
-        `📸 Screenshot from *${name}* \`${userId}\`\n\nApprove in admin panel → /admin`,
+        `📸 Screenshot from *${name}* \`${userId}\` (${planName})\n\nApprove in admin panel → /admin`,
         { parse_mode: 'Markdown' }
       );
     });
   }
 });
 
-console.log('🚀 WinGo Bot v2.0 is running!');
+console.log('🚀 WinGo Bot v2.1 (Multi-Plan + Admin Contact) is running!');
 console.log('🔐 Admin panel is password protected');
 console.log(`👤 Admin IDs: ${ADMIN_IDS}`);
+console.log('📦 Available plans:', Object.keys(PLANS).join(', '));
+console.log('📞 Admin contact: @GojoVipAdmin');
