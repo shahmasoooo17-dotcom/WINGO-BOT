@@ -17,7 +17,7 @@ const ADMIN_IDS  = [7592032793];   // Your Telegram numeric ID
 
 // Payment Details
 const EASYPAISA_NUMBER  = '0318-0939237';   // Your EasyPaisa number
-//const JAZZCASH_NUMBER   = '03XX-XXXXXXX';   // Your JazzCash number
+const JAZZCASH_NUMBER   = '0319-9837973';   // Your JazzCash number
 const ACCOUNT_NAME      = 'MUHAMMAD ABID SHAH';
 
 // Premium Pricing
