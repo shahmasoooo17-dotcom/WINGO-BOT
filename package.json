@@ -1,21 +1,24 @@
 {
   "name": "unified-trading-bot",
-  "version": "1.0.0",
-  "description": "Unified Telegram Bot - Wingo Prediction & Quotex Trading Signals",
-  "author": "Masood King",
-  "license": "MIT",
+  "version": "2.5.0",
+  "description": "Telegram bot for Wingo predictions with auto 1-min results, Quotex signals, premium subscriptions, and feedback system",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
     "dev": "nodemon bot.js"
   },
   "dependencies": {
+    "axios": "^1.7.2",
+    "express": "^4.19.2",
     "node-telegram-bot-api": "^0.64.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.3"
+    "nodemon": "^3.1.0"
   },
   "engines": {
-    "node": ">=16.0.0"
-  }
+    "node": ">=18.x"
+  },
+  "keywords": ["telegram", "trading", "wingo", "quotex", "bot"],
+  "author": "Masood King",
+  "license": "MIT"
 }
