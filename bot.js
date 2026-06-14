@@ -5,7 +5,7 @@ const http = require('http');
 const BOT_TOKEN = process.env.BOT_TOKEN || '8425112915:AAE_RNh0tDnXRp3ULKciTPuqIjuiSoNfQtE';
 const ADMIN_IDS = [7592032793];
 const ADMIN_PASSWORD = 'Masoodking123';
-const BOT_NAME = '🎯 WINGO PREDICTION BOT';
+const BOT_NAME = '🎯 MS WINGO PREDICTION BOT';
 
 const PLANS = {
     '2days':  { days: 2,  price: 500,  name: '2 Days' },
