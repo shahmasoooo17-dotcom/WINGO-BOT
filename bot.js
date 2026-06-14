@@ -1,8 +1,9 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// UNIFIED TRADING BOT v1.0
+// UNIFIED TRADING BOT v2.0
 // - WINGO PREDICTION BOT (30s/1m predictions)
 // - QUOTEX SIGNAL BOT (OTC/Main assets with multiple timeframes)
 // - Multi-plan premium subscriptions (2d, 1w, 2w, 1m)
+// - "Next Prediction" button after each signal
 // - Single admin panel for both bots
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -30,8 +31,8 @@ const PLANS = {
 };
 
 // Free daily limits
-const WINGO_FREE_LIMIT = 8;      // Wingo: 5 free predictions/day
-const QUOTEX_FREE_LIMIT = 8;     // Quotex: 3 free signals/day
+const WINGO_FREE_LIMIT = 5;      // Wingo: 5 free predictions/day
+const QUOTEX_FREE_LIMIT = 3;     // Quotex: 3 free signals/day
 
 // Payment Details
 const EASYPAISA_NUMBER = '0318-0939237';
@@ -52,7 +53,7 @@ const premiumUsers    = {};  // { userId: expiryTimestamp }
 const wingoFreeUsage  = {};  // { userId: { date, count } }
 const quotexFreeUsage = {};  // { userId: { date, count } }
 const userStates      = {};  // { userId: state_string }
-const userBotChoice   = {};  // { userId: 'wingo' or 'quotex' }
+const userLastAction  = {};  // { userId: { botType, assetKey, timeframe, is30s } }
 const pendingPayments = {};  // { userId: { name, date, plan, screenshot } }
 const allUsers        = {};  // { userId: { name, username, joinDate, wingoPredictions, quotexSignals } }
 const adminSessions   = {};  // { adminId: { verified: bool, expiry: timestamp } }
@@ -241,6 +242,34 @@ function canGetQuotexSignal(userId) {
     return { ok: false };
 }
 
+// ── Next Prediction Button ───────────────────────────────────────────────────────
+
+function getNextPredictionKeyboard(botType, context) {
+    if (botType === 'wingo') {
+        const is30s = context === '30s';
+        return {
+            reply_markup: {
+                keyboard: [
+                    [is30s ? '🔄 NEXT 30 SEC PREDICTION' : '🔄 NEXT 1 MIN PREDICTION'],
+                    ['🔙 BACK TO WINGO MENU', '🏠 MAIN MENU']
+                ],
+                resize_keyboard: true
+            }
+        };
+    } else if (botType === 'quotex') {
+        return {
+            reply_markup: {
+                keyboard: [
+                    ['🔄 NEXT SAME SIGNAL'],
+                    ['🔙 BACK TO QUOTEX MENU', '🏠 MAIN MENU']
+                ],
+                resize_keyboard: true
+            }
+        };
+    }
+    return null;
+}
+
 // ── Main Menu Keyboard ──────────────────────────────────────────────────────────
 
 function mainMenu(userId) {
@@ -353,8 +382,8 @@ function showAdminBanner(userId) {
 
 function cmdWingoMenu(msg) {
     const userId = msg.from.id;
-    userBotChoice[userId] = 'wingo';
     userStates[userId] = null;
+    userLastAction[userId] = { botType: 'wingo' };
     bot.sendMessage(userId, `🎲 *WINGO PREDICTION MODE*\n━━━━━━━━━━━━━━━━━━━━\nSelect prediction type:`, { parse_mode: 'Markdown', ...wingoMenu() });
 }
 
@@ -363,6 +392,7 @@ function cmdWingo30(msg) {
     const access = canGetWingoSignal(userId);
     if (!access.ok) return showWingoLimitMsg(userId);
     userStates[userId] = 'wingo_30s_predict';
+    userLastAction[userId] = { botType: 'wingo', type: '30s' };
     bot.sendMessage(userId,
 `🎯 *30 Second WinGo*
 ━━━━━━━━━━━━━━━━━━━━
@@ -379,6 +409,7 @@ function cmdWingo1m(msg) {
     const access = canGetWingoSignal(userId);
     if (!access.ok) return showWingoLimitMsg(userId);
     userStates[userId] = 'wingo_1m_predict';
+    userLastAction[userId] = { botType: 'wingo', type: '1m' };
     bot.sendMessage(userId,
 `🎯 *1 Minute WinGo*
 ━━━━━━━━━━━━━━━━━━━━
@@ -399,6 +430,11 @@ function handleWingoPrediction(userId, periodStr, is30s) {
     const gameMode = is30s ? '30 Sec WinGo' : '1 Min WinGo';
     const timeLeft = is30s ? getTimeLeft30s() : getTimeLeft1m();
     
+    // Store last action for next prediction
+    userLastAction[userId] = { botType: 'wingo', type: is30s ? '30s' : '1m' };
+    
+    const remaining = isPrem ? '♾️ Unlimited' : `${WINGO_FREE_LIMIT - getWingoFreeUsed(userId)} left today`;
+    
     bot.sendMessage(userId,
 `${BOT_NAME} - WINGO
 ━━━━━━━━━━━━━━━━━━━━
@@ -413,14 +449,11 @@ ${isPrem ? '💎 PREMIUM' : '🆓 FREE'} PREDICTION
 📏 Size: *${pred.size}*
 💡 Confidence: ${pred.conf}
 ━━━━━━━━━━━━━━━━━━━━
-${isPrem ? '_💎 Premium signal_ ' : '_⚠️ Free signal | /buypremium for better accuracy_'}`,
-        { parse_mode: 'Markdown' }
+${isPrem ? '_💎 Premium signal_ ' : '_⚠️ Free signal | /buypremium for better accuracy_'}
+━━━━━━━━━━━━━━━━━━━━
+📊 Remaining: ${remaining}`,
+        { parse_mode: 'Markdown', ...getNextPredictionKeyboard('wingo', is30s ? '30s' : '1m') }
     );
-    
-    const remaining = isPrem ? '♾️ Unlimited' : `${WINGO_FREE_LIMIT - getWingoFreeUsed(userId)} left today`;
-    setTimeout(() => {
-        bot.sendMessage(userId, `📊 Remaining: ${remaining}`, mainMenu(userId));
-    }, 500);
 }
 
 function showWingoLimitMsg(userId) {
@@ -431,8 +464,8 @@ function showWingoLimitMsg(userId) {
 
 function cmdQuotexMenu(msg) {
     const userId = msg.from.id;
-    userBotChoice[userId] = 'quotex';
     userStates[userId] = null;
+    userLastAction[userId] = { botType: 'quotex' };
     bot.sendMessage(userId, `📊 *QUOTEX SIGNAL MODE*\n━━━━━━━━━━━━━━━━━━━━\n⏰ Chart Time (UTC+3): ${getFormattedUTCTime()}\n\nSelect signal type:`, { parse_mode: 'Markdown', ...quotexMainMenu() });
 }
 
@@ -468,6 +501,11 @@ async function sendQuotexSignal(userId, assetKey, timeframeKey) {
     const directionEmoji = signal.direction === 'CALL' ? '🟢 CALL (UP)' : '🔴 PUT (DOWN)';
     const confidenceBar = '█'.repeat(Math.floor(signal.confidence / 10)) + '░'.repeat(10 - Math.floor(signal.confidence / 10));
     
+    // Store last action for next prediction
+    userLastAction[userId] = { botType: 'quotex', assetKey: assetKey, timeframe: timeframeKey };
+    
+    const remaining = isPrem ? '♾️ Unlimited' : `${QUOTEX_FREE_LIMIT - getQuotexFreeUsed(userId)} left today`;
+    
     bot.sendMessage(userId,
 `╔══════════════════════════════════════╗
 ║     📊 *${BOT_NAME} - QUOTEX* 📊
@@ -491,14 +529,45 @@ async function sendQuotexSignal(userId, assetKey, timeframeKey) {
 ║ 📉 *RSI:* ${signal.rsi}
 ║ 📊 *MACD:* ${signal.macdSignal}
 ╚══════════════════════════════════════╝
-${isPrem ? '✨ *PREMIUM SIGNAL - High Accuracy* ✨' : '⚠️ *FREE SIGNAL - Upgrade for better accuracy* ⚠️'}`,
-        { parse_mode: 'Markdown' }
+${isPrem ? '✨ *PREMIUM SIGNAL - High Accuracy* ✨' : '⚠️ *FREE SIGNAL - Upgrade for better accuracy* ⚠️'}
+━━━━━━━━━━━━━━━━━━━━
+📊 Signals remaining: ${remaining}`,
+        { parse_mode: 'Markdown', ...getNextPredictionKeyboard('quotex') }
     );
+}
+
+// ── Next Prediction Handler ─────────────────────────────────────────────────────
+
+function handleNextPrediction(userId, text) {
+    const lastAction = userLastAction[userId];
+    if (!lastAction) return false;
     
-    const remaining = isPrem ? '♾️ Unlimited' : `${QUOTEX_FREE_LIMIT - getQuotexFreeUsed(userId)} left today`;
-    setTimeout(() => {
-        bot.sendMessage(userId, `📊 Signals remaining: ${remaining}`, mainMenu(userId));
-    }, 1000);
+    // Wingo Next Prediction
+    if (lastAction.botType === 'wingo') {
+        if (text === '🔄 NEXT 30 SEC PREDICTION') {
+            cmdWingo30({ from: { id: userId } });
+            return true;
+        } else if (text === '🔄 NEXT 1 MIN PREDICTION') {
+            cmdWingo1m({ from: { id: userId } });
+            return true;
+        } else if (text === '🔙 BACK TO WINGO MENU') {
+            cmdWingoMenu({ from: { id: userId } });
+            return true;
+        }
+    }
+    
+    // Quotex Next Prediction
+    if (lastAction.botType === 'quotex') {
+        if (text === '🔄 NEXT SAME SIGNAL' && lastAction.assetKey && lastAction.timeframe) {
+            sendQuotexSignal(userId, lastAction.assetKey, lastAction.timeframe);
+            return true;
+        } else if (text === '🔙 BACK TO QUOTEX MENU') {
+            cmdQuotexMenu({ from: { id: userId } });
+            return true;
+        }
+    }
+    
+    return false;
 }
 
 // ── Premium Purchase Commands ───────────────────────────────────────────────────
@@ -604,12 +673,14 @@ function cmdHelp(msg) {
 • 30 SEC - Fast predictions
 • 1 MIN - Standard predictions
 • Enter period number from game
+• After prediction, click "NEXT" for more
 
 *📊 QUOTEX SIGNALS:*
 • OTC SIGNAL - Digital options
 • MAIN SIGNAL - Currency pairs
 • Select timeframe (1m to 1h)
 • Trade at UTC+3 entry time
+• After signal, click "NEXT SAME SIGNAL"
 
 *👑 ADMIN:* @GojoVipAdmin
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -650,6 +721,18 @@ function handleMessage(msg) {
     // Admin panel handler
     if (state === 'admin_panel' && isAdmin(userId) && isAdminVerified(userId)) {
         handleAdminCommands(userId, text);
+        return;
+    }
+    
+    // Check for Next Prediction buttons first
+    if (handleNextPrediction(userId, text)) {
+        return;
+    }
+    
+    // Main menu navigation
+    if (text === '🏠 MAIN MENU') {
+        userStates[userId] = null;
+        bot.sendMessage(userId, 'Main Menu:', mainMenu(userId));
         return;
     }
     
@@ -746,7 +829,6 @@ function cmdStart(msg) {
     const name = msg.from.first_name || 'Trader';
     const isPrem = isPremium(userId);
     userStates[userId] = null;
-    userBotChoice[userId] = null;
     bot.sendMessage(userId,
 `👋 *WELCOME TO ${BOT_NAME}, ${name}!*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -886,7 +968,7 @@ bot.on('message', (msg) => {
     handleMessage(msg);
 });
 
-console.log('🚀 UNIFIED TRADING BOT is running!');
-console.log('📦 Features: Wingo Prediction + Quotex Signals');
+console.log('🚀 UNIFIED TRADING BOT v2.0 (With Next Prediction Button) is running!');
+console.log('📦 Features: Wingo Prediction + Quotex Signals + Next Prediction');
 console.log(`👤 Admin IDs: ${ADMIN_IDS}`);
 console.log('💰 Plans:', Object.keys(PLANS).join(', '));
