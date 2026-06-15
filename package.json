@@ -1,24 +1,25 @@
 {
   "name": "masood-trading-bot",
-  "version": "3.3.0",
-  "description": "Enterprise WinGo predictive engine optimized for Pakistan Standard Time alignment.",
+  "version": "2.4.0",
+  "description": "Unified Trading Bot with Wingo predictions, Quotex signals, premium subscriptions, feedback system, and admin panel.",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
-  "keywords": [
-    "telegram",
-    "bot",
-    "wingo",
-    "prediction",
-    "pkt"
-  ],
-  "author": "Masood",
-  "license": "ISC",
   "dependencies": {
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^0.64.0"
   },
   "engines": {
-    "node": ">=18.0.0"
-  }
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "telegram",
+    "trading-bot",
+    "wingo",
+    "quotex",
+    "premium",
+    "feedback-system"
+  ],
+  "author": "Masood Trading Bot",
+  "license": "MIT"
 }
