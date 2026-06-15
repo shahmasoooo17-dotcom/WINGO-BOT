@@ -1,0 +1,24 @@
+{
+  "name": "masood-trading-bot",
+  "version": "3.3.0",
+  "description": "Enterprise WinGo predictive engine optimized for Pakistan Standard Time alignment.",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "wingo",
+    "prediction",
+    "pkt"
+  ],
+  "author": "Masood",
+  "license": "ISC",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
