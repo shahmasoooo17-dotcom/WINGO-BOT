@@ -25,20 +25,21 @@ const BOT_NAME = '🎯 MASOOD TRADING BOT';
 
 // 🆕 MULTIPLE PREMIUM PLANS (edit prices below)
 const PLANS = {
-    '2days':  { days: 2,  price: 500,  name: '2 Days' },
+    '2days':  { days: 2,  price: 200,  name: '2 Days' },
     '1week':  { days: 7,  price: 1000, name: '1 Week' },
     '2weeks': { days: 14, price: 1800, name: '2 Weeks' },
     '1month': { days: 30, price: 3000, name: '1 Month' }
 };
 
 // Free daily limits
-const WINGO_FREE_LIMIT = 5;
-const QUOTEX_FREE_LIMIT = 3;
+const WINGO_FREE_LIMIT = 10;
+const QUOTEX_FREE_LIMIT = 5;
 
 // Payment Details
 const EASYPAISA_NUMBER = '0318-0939237';
 const JAZZCASH_NUMBER = '0319-9837973';
-const ACCOUNT_NAME = 'MUHAMMAD ABID SHAH';
+const EASYPAISA_ACCOUNT_NAME = 'MUHAMMAD ABID SHAH';
+const JAZZCASH_ACCOUNT_NAME = 'MUHAMMAD HIZBULLAH SHAH';
 
 // Timezone for Quotex chart (UTC+3)
 const CHART_TIMEZONE = 'UTC+3';
@@ -1026,6 +1027,7 @@ function cmdHelp(msg) {
 • Help us improve the bot
 
 *👑 ADMIN CONTACT:* @GojoVipAdmin
+*👑 ADMIN WHATSAPP CONTACT:* 0318-0929237
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🆓 FREE: Wingo(${WINGO_FREE_LIMIT}) + Quotex(${QUOTEX_FREE_LIMIT})/day
 💎 PREMIUM: Unlimited + Higher accuracy
